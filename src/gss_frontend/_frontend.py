@@ -106,6 +106,29 @@ def _get_int_divisors(n: int):
     return sorted(list(set(divs)))
 
 
+def _is_cuda_oom_error(exc: BaseException) -> bool:
+    """Return True for CUDA OOM and closely related allocator failures.
+
+    CUDA execution is asynchronous, so memory failures sometimes surface as a
+    generic RuntimeError at a later synchronization point rather than as
+    torch.cuda.OutOfMemoryError at the original allocation site.
+    """
+    if isinstance(exc, torch.cuda.OutOfMemoryError):
+        return True
+    if not isinstance(exc, RuntimeError):
+        return False
+
+    msg = str(exc).lower()
+    oom_markers = (
+        "cuda out of memory",
+        "cublas_status_alloc_failed",
+        "cudnn_status_alloc_failed",
+        "hip out of memory",
+        "out of memory",
+    )
+    return any(marker in msg for marker in oom_markers)
+
+
 def _try_gpu_else_cpu(module: torch.nn.Module, *args, **kwargs):
     """Run *module* on GPU; on CUDA OOM fall back to CPU for this call only.
 
@@ -115,7 +138,9 @@ def _try_gpu_else_cpu(module: torch.nn.Module, *args, **kwargs):
     """
     try:
         return module(*args, **kwargs)
-    except torch.cuda.OutOfMemoryError:
+    except RuntimeError as exc:
+        if not _is_cuda_oom_error(exc):
+            raise
         torch.cuda.empty_cache()
         logger.warning(
             "CUDA OOM in %s — retrying this chunk on CPU.",
@@ -387,7 +412,9 @@ class GSS:
                         num_chunks=num_chunks,
                     )
                 break  # success
-            except (torch.cuda.OutOfMemoryError, decimal.InvalidOperation):
+            except (RuntimeError, decimal.InvalidOperation) as exc:
+                if isinstance(exc, RuntimeError) and not _is_cuda_oom_error(exc):
+                    raise
                 logger.warning(
                     "OOM with num_chunks=%d, retrying with more chunks.", num_chunks
                 )
