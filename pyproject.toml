@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "gss-frontend"
+version = "0.1.0"
+description = "Minimal NeMo-free GSS front-end for single-utterance speech enhancement"
+requires-python = ">=3.9"
+dependencies = [
+    "torch",
+    "torchaudio",
+    "numpy",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
