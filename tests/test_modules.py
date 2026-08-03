@@ -341,12 +341,24 @@ class TestGSSEnhance:
         )
 
     def _make_inputs(self):
-        rng = np.random.default_rng(42)
-        audio = rng.standard_normal((N_CHANNELS, N_SAMPLES)).astype(np.float32)
-        activity = np.zeros((N_SPEAKERS, N_SAMPLES), dtype=np.float32)
+        # Spatially diverse sinusoidal sources: different frequencies + per-channel gains
+        # so GSS has real spatial cues to separate speakers.
+        t = np.arange(N_SAMPLES, dtype=np.float32) / SAMPLE_RATE
+        freqs = [300.0, 800.0, 1400.0]
+        gains = np.array([[1.0, 0.8, 0.5, 0.2],
+                          [0.2, 0.5, 0.8, 1.0],
+                          [0.6, 0.2, 0.9, 0.4]], dtype=np.float32)
         seg = N_SAMPLES // N_SPEAKERS
+        activity = np.zeros((N_SPEAKERS, N_SAMPLES), dtype=np.float32)
+        audio = np.zeros((N_CHANNELS, N_SAMPLES), dtype=np.float32)
         for s in range(N_SPEAKERS):
+            src = np.sin(2 * np.pi * freqs[s] * t).astype(np.float32)
+            src[: s * seg] = 0.0
+            src[(s + 1) * seg :] = 0.0
+            audio += gains[s, :, None] * src[None, :]
             activity[s, s * seg : (s + 1) * seg] = 1.0
+        rng = np.random.default_rng(42)
+        audio += rng.standard_normal(audio.shape).astype(np.float32) * 0.01
         return audio, activity
 
     def test_output_shape(self, frontend):
