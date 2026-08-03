@@ -5,7 +5,9 @@ This script demonstrates training-friendly usage of:
   - GSS.estimate_masks
   - GSS.beamform
 
-All three methods accept torch.Tensor input and preserve gradients.
+All three methods accept torch.Tensor input and preserve gradients for both
+audio and activity (requires aggregation="mean" or "max"; "any" breaks the
+activity gradient via boolean ops).
 
 Usage
 -----
@@ -50,13 +52,14 @@ def make_toy_batch(
     gains1 = torch.tensor([0.6, 0.8, 1.0, 0.7], device=device)
     audio = gains0[:, None] * src0[None, :] + gains1[:, None] * src1[None, :]
 
-    # Add tiny noise and enable gradient on audio.
+    # Add tiny noise and enable gradient on both audio and activity.
     audio = audio + 0.005 * torch.randn_like(audio)
     audio.requires_grad_(True)
 
     activity = torch.zeros(n_speakers, n_samples, device=device, dtype=torch.float32)
     activity[0, : 2 * seg] = 1.0
     activity[1, seg:] = 1.0
+    activity.requires_grad_(True)
 
     return audio, activity
 
@@ -93,7 +96,11 @@ def main():
     if audio_t.grad is None:
         print("No gradient on input audio (unexpected).")
     else:
-        print(f"audio grad norm: {audio_t.grad.norm().item():.6f}")
+        print(f"audio    grad norm: {audio_t.grad.norm().item():.6f}")
+    if activity_t.grad is None:
+        print("No gradient on input activity (unexpected).")
+    else:
+        print(f"activity grad norm: {activity_t.grad.norm().item():.6f}")
 
 
 if __name__ == "__main__":

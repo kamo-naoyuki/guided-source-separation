@@ -108,20 +108,23 @@ both `numpy.ndarray` and `torch.Tensor`.
 When inputs are `torch.Tensor`, the computation graph is preserved, so these APIs
 are backpropagatable and can be used inside neural-network training loops.
 
+Gradients flow through both `audio` and `activity` (with `aggregation="mean"` or
+`"max"`; `"any"` uses boolean ops and breaks the activity gradient).
+
 ```python
 import torch
 
 # Example: training-friendly use (Tensor input -> Tensor output)
 audio_t = torch.randn(8, 16000, device="cuda", dtype=torch.float32, requires_grad=True)
-activity_t = torch.zeros(2, 16000, device="cuda", dtype=torch.float32)
-activity_t[0, 2000:8000] = 1.0
+activity_t = torch.zeros(2, 16000, device="cuda", dtype=torch.float32, requires_grad=True)
+activity_t.data[0, 2000:8000] = 1.0
 
 dry_t = frontend.dereverberate(audio_t)
 masks_t = frontend.estimate_masks(dry_t, activity_t)
 out_t = frontend.beamform(dry_t, masks_t[0], masks_t.sum(dim=0) - masks_t[0])
 
 loss = out_t.abs().mean()
-loss.backward()  # gradients flow back to audio_t
+loss.backward()  # gradients flow back to both audio_t and activity_t
 ```
 
 ## API

@@ -106,10 +106,11 @@ class TestUtilities:
         like = torch.zeros(2, 10)
         lengths = torch.tensor([3, 7])
         mask = make_seq_mask_like(lengths=lengths, like=like, time_dim=-1, valid_ones=True)
-        assert mask[0, :, :3].all()
-        assert not mask[0, :, 3:].any()
-        assert mask[1, :, :7].all()
-        assert not mask[1, :, 7:].any()
+        # like is 2D so mask is also 2D (B, T)
+        assert mask[0, :3].all()
+        assert not mask[0, 3:].any()
+        assert mask[1, :7].all()
+        assert not mask[1, 7:].any()
 
     def test_samples_to_frames(self):
         # Standard formula: frames = (samples - fft + hop) / hop
@@ -333,7 +334,7 @@ class TestGSSEnhance:
             stft_hop_length=HOP_LENGTH,
             dereverb_filter_length=5,
             dereverb_num_iterations=1,
-            bss_iterations=2,
+            bss_iterations=10,
             mc_ref_channel=0,
             use_dtype=torch.cfloat,
             device="cpu",
@@ -506,3 +507,66 @@ class TestGSSStandaloneAPIs:
         # spectrogram directly) but should have the same length and no NaNs.
         assert abs(len(out) - len(ref)) <= HOP_LENGTH
         assert not np.any(np.isnan(out))
+
+
+# ---------------------------------------------------------------------------
+# Backprop through audio and activity
+# ---------------------------------------------------------------------------
+
+class TestBackprop:
+    """Verify that gradients flow through audio and activity (mean/max aggregation)."""
+
+    @pytest.fixture
+    def frontend(self):
+        return GSS(
+            stft_fft_length=FFT_LENGTH,
+            stft_hop_length=HOP_LENGTH,
+            dereverb_filter_length=5,
+            dereverb_num_iterations=1,
+            bss_iterations=2,
+            mc_ref_channel=0,
+            use_dtype=torch.cfloat,
+            device="cpu",
+        )
+
+    def _make_tensors(self):
+        torch.manual_seed(0)
+        audio = torch.randn(N_CHANNELS, N_SAMPLES, dtype=torch.float32, requires_grad=True)
+        activity = torch.zeros(N_SPEAKERS, N_SAMPLES, dtype=torch.float32)
+        seg = N_SAMPLES // N_SPEAKERS
+        for s in range(N_SPEAKERS):
+            activity.data[s, s * seg : (s + 1) * seg] = 1.0
+        activity.requires_grad_(True)
+        return audio, activity
+
+    @pytest.mark.parametrize("aggregation", ["mean", "max"])
+    def test_audio_grad_flows(self, frontend, aggregation):
+        frontend.activity_aggregation = aggregation
+        audio, activity = self._make_tensors()
+        dry = frontend.dereverberate(audio)
+        masks = frontend.estimate_masks(dry, activity)
+        out = frontend.beamform(dry, masks[0], masks.sum(dim=0) - masks[0])
+        out.abs().mean().backward()
+        assert audio.grad is not None
+        assert not torch.all(audio.grad == 0)
+
+    @pytest.mark.parametrize("aggregation", ["mean", "max"])
+    def test_activity_grad_flows(self, frontend, aggregation):
+        frontend.activity_aggregation = aggregation
+        audio, activity = self._make_tensors()
+        dry = frontend.dereverberate(audio)
+        masks = frontend.estimate_masks(dry, activity)
+        out = frontend.beamform(dry, masks[0], masks.sum(dim=0) - masks[0])
+        out.abs().mean().backward()
+        assert activity.grad is not None
+        assert not torch.all(activity.grad == 0)
+
+    def test_activity_grad_blocked_by_any(self, frontend):
+        """aggregation='any' uses boolean ops so activity gradient must be zero."""
+        frontend.activity_aggregation = "any"
+        audio, activity = self._make_tensors()
+        dry = frontend.dereverberate(audio)
+        masks = frontend.estimate_masks(dry, activity)
+        out = frontend.beamform(dry, masks[0], masks.sum(dim=0) - masks[0])
+        out.abs().mean().backward()
+        assert activity.grad is None or torch.all(activity.grad == 0)
