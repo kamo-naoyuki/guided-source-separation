@@ -341,24 +341,24 @@ class TestGSSEnhance:
         )
 
     def _make_inputs(self):
-        # Spatially diverse sinusoidal sources: different frequencies + per-channel gains
-        # so GSS has real spatial cues to separate speakers.
+        # Two overlapping sinusoidal speakers with opposite spatial signatures.
+        # Overlap is required so GSS has a real separation task and produces
+        # distinct masks for the two speaker IDs.
         t = np.arange(N_SAMPLES, dtype=np.float32) / SAMPLE_RATE
-        freqs = [300.0, 800.0, 1400.0]
-        gains = np.array([[1.0, 0.8, 0.5, 0.2],
-                          [0.2, 0.5, 0.8, 1.0],
-                          [0.6, 0.2, 0.9, 0.4]], dtype=np.float32)
-        seg = N_SAMPLES // N_SPEAKERS
-        activity = np.zeros((N_SPEAKERS, N_SAMPLES), dtype=np.float32)
-        audio = np.zeros((N_CHANNELS, N_SAMPLES), dtype=np.float32)
-        for s in range(N_SPEAKERS):
-            src = np.sin(2 * np.pi * freqs[s] * t).astype(np.float32)
-            src[: s * seg] = 0.0
-            src[(s + 1) * seg :] = 0.0
-            audio += gains[s, :, None] * src[None, :]
-            activity[s, s * seg : (s + 1) * seg] = 1.0
+        seg = N_SAMPLES // 3
+        gains0 = np.array([1.0, 0.8, 0.4, 0.1], dtype=np.float32)
+        gains1 = np.array([0.1, 0.4, 0.8, 1.0], dtype=np.float32)
+        src0 = np.sin(2 * np.pi * 300.0 * t).astype(np.float32)
+        src0[2 * seg :] = 0.0                      # active in [0, 2/3)
+        src1 = np.sin(2 * np.pi * 800.0 * t).astype(np.float32)
+        src1[: seg] = 0.0                          # active in [1/3, 1)
+        audio = (gains0[:, None] * src0[None, :] +
+                 gains1[:, None] * src1[None, :])
         rng = np.random.default_rng(42)
         audio += rng.standard_normal(audio.shape).astype(np.float32) * 0.01
+        activity = np.zeros((2, N_SAMPLES), dtype=np.float32)
+        activity[0, : 2 * seg] = 1.0
+        activity[1, seg :] = 1.0
         return audio, activity
 
     def test_output_shape(self, frontend):
