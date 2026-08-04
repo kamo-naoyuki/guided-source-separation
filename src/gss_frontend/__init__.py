@@ -12,6 +12,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from ._frontend import GSS
+from ._frontend import GSS, activity_time_to_timefreq
+from ._modules import (
+    AudioToSpectrogram,
+    SpectrogramToAudio,
+    MaskBasedDereverbWPE,
+    MaskBasedBeamformer,
+    MaskEstimatorGSS,
+)
 
-__all__ = ["GSS"]
+__all__ = [
+    "GSS",
+    "activity_time_to_timefreq",
+    "AudioToSpectrogram",
+    "SpectrogramToAudio",
+    "MaskBasedDereverbWPE",
+    "MaskBasedBeamformer",
+    "MaskEstimatorGSS",
+]

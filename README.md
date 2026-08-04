@@ -8,6 +8,11 @@ Extracted from the [CHiME-8 DASR NeMo baseline](https://github.com/NVIDIA-NeMo/S
 dependencies, and DataLoader boilerplate so that it can be called **one utterance
 at a time** with a straightforward numpy API.
 
+All operations are differentiable: when `audio` and `activity` are
+`torch.Tensor`, gradients propagate through dereverberation, mask estimation,
+and beamforming, making the modules suitable for **end-to-end training**
+(see [`examples/tensor_backprop.py`](examples/tensor_backprop.py)).
+
 ## What is GSS?
 
 Guided Source Separation (GSS) is a multichannel speech-enhancement front end
@@ -87,45 +92,53 @@ enhanced = frontend.enhance(audio, activity, speaker_id=0)
 sf.write("enhanced.wav", enhanced, sr)
 ```
 
-The three pipeline stages can also be called independently:
+The individual sub-modules are also exported and can be composed directly in
+spectrogram domain, avoiding redundant STFT/iSTFT round-trips:
 
 ```python
-# WPE dereverberation only → (channels, samples)
-dry = frontend.dereverberate(audio)
-
-# GSS mask estimation only → (speakers, freq, frames)
-masks = frontend.estimate_masks(audio, activity)
-
-# Mask-based beamforming only → (samples,)
-mask_target    = masks[0]
-mask_undesired = masks.sum(axis=0) - masks[0]
-enhanced = frontend.beamform(audio, mask_target, mask_undesired)
-```
-
-The standalone stage APIs (`dereverberate`, `estimate_masks`, `beamform`) accept
-both `numpy.ndarray` and `torch.Tensor`.
-
-When inputs are `torch.Tensor`, the computation graph is preserved, so these APIs
-are backpropagatable and can be used inside neural-network training loops.
-
-Gradients flow through both `audio` and `activity` (with `aggregation="mean"` or
-`"max"`; `"any"` uses boolean ops and breaks the activity gradient).
-
-```python
+from gss_frontend import (
+    AudioToSpectrogram, SpectrogramToAudio,
+    MaskBasedDereverbWPE, MaskEstimatorGSS, MaskBasedBeamformer,
+    activity_time_to_timefreq,
+)
 import torch
 
-# Example: training-friendly use (Tensor input -> Tensor output)
-audio_t = torch.randn(8, 16000, device="cuda", dtype=torch.float32, requires_grad=True)
-activity_t = torch.zeros(2, 16000, device="cuda", dtype=torch.float32, requires_grad=True)
-activity_t.data[0, 2000:8000] = 1.0
+FFT, HOP = 1024, 256
 
-dry_t = frontend.dereverberate(audio_t)
-masks_t = frontend.estimate_masks(dry_t, activity_t)
-out_t = frontend.beamform(dry_t, masks_t[0], masks_t.sum(dim=0) - masks_t[0])
+analysis  = AudioToSpectrogram(fft_length=FFT, hop_length=HOP).cuda()
+synthesis = SpectrogramToAudio(fft_length=FFT, hop_length=HOP).cuda()
+dereverb  = MaskBasedDereverbWPE(filter_length=10, prediction_delay=2).cuda()
+gss       = MaskEstimatorGSS(num_iterations=20).cuda()
+mc        = MaskBasedBeamformer().cuda()
 
-loss = out_t.abs().mean()
-loss.backward()  # gradients flow back to both audio_t and activity_t
+audio_t    = torch.from_numpy(audio).float().cuda().requires_grad_(True)
+activity_t = torch.from_numpy(activity).float().cuda().requires_grad_(True)
+
+audio_3d    = audio_t.unsqueeze(0)     # (1, ch, T)
+activity_3d = activity_t.unsqueeze(0)  # (1, spk, T)
+
+x_enc, _    = analysis(audio_3d)      # (1, ch, F, N)
+x_enc, _    = dereverb(input=x_enc)
+a_enc       = activity_time_to_timefreq(activity_3d, win_length=FFT, hop_length=HOP)
+masks       = gss(x_enc, a_enc)       # (1, spk, F, N)
+mask_t      = masks[:, :1]            # target speaker
+mask_u      = masks.sum(1, keepdim=True) - mask_t
+target_enc, _ = mc(input=x_enc, mask=mask_t, mask_undesired=mask_u)
+out, _      = synthesis(input=target_enc)
+enhanced    = out[0, 0]               # (T,) — still a Tensor, gradients intact
+
+loss = enhanced.abs().mean()
+loss.backward()
+# audio_t.grad and activity_t.grad are now populated
 ```
+
+Because operations stay in spectrogram domain throughout, `GSS.estimate_masks`
+can still be used as a convenience helper that handles the numpy/tensor
+conversion and `activity_time_to_timefreq`.
+
+Gradients flow through both `audio` and `activity` when using `torch.Tensor`
+(with `aggregation="mean"` or `"max"`; `"any"` uses boolean ops and blocks the
+activity gradient). See `examples/tensor_backprop.py` for a full example.
 
 ## API
 
@@ -161,14 +174,6 @@ Same as `enhance`, but automatically retries with a finer frequency-axis split
 whenever a CUDA out-of-memory error occurs.  If all chunk sizes are exhausted,
 falls back to per-stage CPU execution (dereverb / GSS / beamforming individually).
 
-### `GSS.dereverberate(audio)`
-
-Apply WPE dereverberation to multi-channel audio.
-
-- **`audio`** — `(channels, samples)` float32 `numpy.ndarray` or `torch.Tensor`
-- **Returns** `(channels, samples)` same type as input (`numpy.ndarray` / `torch.Tensor`)
-- When `audio` is a `torch.Tensor`, gradients are preserved (training-friendly)
-
 ### `GSS.estimate_masks(audio, activity)`
 
 Estimate time-frequency masks via GSS (cACGMM EM).
@@ -178,15 +183,21 @@ Estimate time-frequency masks via GSS (cACGMM EM).
 - **Returns** `(speakers, freq, frames)` same type as `audio`, values in [0, 1]
 - When `audio` is a `torch.Tensor`, gradients are preserved (training-friendly)
 
-### `GSS.beamform(audio, mask_target, mask_undesired)`
+### Building-block modules
 
-Apply mask-based multichannel beamforming with pre-computed masks.
+The following classes are exported directly from `gss_frontend` and operate on
+spectrograms (shape `(B, C, F, N)` complex):
 
-- **`audio`** — `(channels, samples)` float32 `numpy.ndarray` or `torch.Tensor`
-- **`mask_target`** — `(freq, frames)` float32 `numpy.ndarray` or `torch.Tensor`
-- **`mask_undesired`** — `(freq, frames)` float32 `numpy.ndarray` or `torch.Tensor`
-- **Returns** `(samples,)` same type as `audio` (`numpy.ndarray` / `torch.Tensor`)
-- When `audio` is a `torch.Tensor`, gradients are preserved (training-friendly)
+| Class | Description |
+|---|---|
+| `AudioToSpectrogram` | STFT: waveform → complex spectrogram |
+| `SpectrogramToAudio` | iSTFT: complex spectrogram → waveform |
+| `MaskBasedDereverbWPE` | Iterative WPE dereverberation |
+| `MaskEstimatorGSS` | cACGMM mask estimation |
+| `MaskBasedBeamformer` | Mask-based multichannel beamformer |
+
+`activity_time_to_timefreq(activity, win_length, hop_length)` converts
+sample-level activity `(B, spk, T)` to frame-level `(B, spk, N)`.
 
 ## Repository layout
 

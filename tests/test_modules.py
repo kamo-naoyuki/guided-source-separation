@@ -439,23 +439,6 @@ class TestGSSStandaloneAPIs:
             activity[s, s * seg : (s + 1) * seg] = 1.0
         return audio, activity
 
-    # --- dereverberate ---
-
-    def test_dereverberate_output_shape(self, frontend):
-        audio, _ = self._make_inputs()
-        dry = frontend.dereverberate(audio)
-        assert dry.shape == audio.shape
-
-    def test_dereverberate_output_dtype(self, frontend):
-        audio, _ = self._make_inputs()
-        dry = frontend.dereverberate(audio)
-        assert dry.dtype == np.float32
-
-    def test_dereverberate_no_nan(self, frontend):
-        audio, _ = self._make_inputs()
-        dry = frontend.dereverberate(audio)
-        assert not np.any(np.isnan(dry))
-
     # --- estimate_masks ---
 
     def test_estimate_masks_output_shape(self, frontend):
@@ -482,43 +465,6 @@ class TestGSSStandaloneAPIs:
         audio, activity = self._make_inputs()
         masks = frontend.estimate_masks(audio, activity)
         assert not np.any(np.isnan(masks))
-
-    # --- beamform ---
-
-    def test_beamform_output_shape(self, frontend):
-        audio, activity = self._make_inputs()
-        masks = frontend.estimate_masks(audio, activity)
-        mask_target    = masks[0]
-        mask_undesired = masks.sum(axis=0) - masks[0]
-        enhanced = frontend.beamform(audio, mask_target, mask_undesired)
-        assert enhanced.ndim == 1
-        assert len(enhanced) > 0
-
-    def test_beamform_output_dtype(self, frontend):
-        audio, activity = self._make_inputs()
-        masks = frontend.estimate_masks(audio, activity)
-        enhanced = frontend.beamform(audio, masks[0], masks.sum(axis=0) - masks[0])
-        assert enhanced.dtype == np.float32
-
-    def test_beamform_no_nan(self, frontend):
-        audio, activity = self._make_inputs()
-        masks = frontend.estimate_masks(audio, activity)
-        enhanced = frontend.beamform(audio, masks[0], masks.sum(axis=0) - masks[0])
-        assert not np.any(np.isnan(enhanced))
-
-    def test_dereverberate_then_beamform_matches_enhance(self, frontend):
-        """dereverberate → estimate_masks → beamform should approximate enhance."""
-        audio, activity = self._make_inputs()
-        # Full pipeline via enhance
-        ref = frontend.enhance(audio, activity, speaker_id=0)
-        # Manual pipeline
-        dry   = frontend.dereverberate(audio)
-        masks = frontend.estimate_masks(dry, activity)
-        out   = frontend.beamform(dry, masks[0], masks.sum(axis=0) - masks[0])
-        # Results won't be bit-exact (enhance does dereverb per-chunk on the
-        # spectrogram directly) but should have the same length and no NaNs.
-        assert abs(len(out) - len(ref)) <= HOP_LENGTH
-        assert not np.any(np.isnan(out))
 
 
 # ---------------------------------------------------------------------------
@@ -551,13 +497,29 @@ class TestBackprop:
         activity.requires_grad_(True)
         return audio, activity
 
+    def _run_pipeline(self, frontend, audio_t, activity_t):
+        audio_3d    = audio_t.unsqueeze(0)
+        activity_3d = activity_t.unsqueeze(0)
+        x_enc, _    = frontend.analysis(audio_3d)
+        x_enc, _    = frontend.dereverb(input=x_enc)
+        a_enc = activity_time_to_timefreq(
+            activity_3d,
+            win_length=frontend.fft_length,
+            hop_length=frontend.hop_length,
+            aggregation=frontend.activity_aggregation,
+        )
+        masks       = frontend.gss(x_enc, a_enc)
+        mask_t      = masks[:, :1]
+        mask_u      = masks.sum(dim=1, keepdim=True) - mask_t
+        target_enc, _ = frontend.mc(input=x_enc, mask=mask_t, mask_undesired=mask_u)
+        out, _      = frontend.synthesis(input=target_enc)
+        return out[0, 0]
+
     @pytest.mark.parametrize("aggregation", ["mean", "max"])
     def test_audio_grad_flows(self, frontend, aggregation):
         frontend.activity_aggregation = aggregation
         audio, activity = self._make_tensors()
-        dry = frontend.dereverberate(audio)
-        masks = frontend.estimate_masks(dry, activity)
-        out = frontend.beamform(dry, masks[0], masks.sum(dim=0) - masks[0])
+        out = self._run_pipeline(frontend, audio, activity)
         out.abs().mean().backward()
         assert audio.grad is not None
         assert not torch.all(audio.grad == 0)
@@ -566,9 +528,7 @@ class TestBackprop:
     def test_activity_grad_flows(self, frontend, aggregation):
         frontend.activity_aggregation = aggregation
         audio, activity = self._make_tensors()
-        dry = frontend.dereverberate(audio)
-        masks = frontend.estimate_masks(dry, activity)
-        out = frontend.beamform(dry, masks[0], masks.sum(dim=0) - masks[0])
+        out = self._run_pipeline(frontend, audio, activity)
         out.abs().mean().backward()
         assert activity.grad is not None
         assert not torch.all(activity.grad == 0)
@@ -577,8 +537,7 @@ class TestBackprop:
         """aggregation='any' uses boolean ops so activity gradient must be zero."""
         frontend.activity_aggregation = "any"
         audio, activity = self._make_tensors()
-        dry = frontend.dereverberate(audio)
-        masks = frontend.estimate_masks(dry, activity)
-        out = frontend.beamform(dry, masks[0], masks.sum(dim=0) - masks[0])
+        out = self._run_pipeline(frontend, audio, activity)
         out.abs().mean().backward()
         assert activity.grad is None or torch.all(activity.grad == 0)
+

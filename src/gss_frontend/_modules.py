@@ -109,7 +109,7 @@ class AudioToSpectrogram(torch.nn.Module):
         B, T = input.size(0), input.size(-1)
         input = input.view(B, -1, T)
 
-        with torch.cuda.amp.autocast(enabled=False):
+        with torch.amp.autocast('cuda', enabled=False):
             output = self.stft(input.float())  # (B, C, F, N)
 
         if input_length is not None:
@@ -147,7 +147,7 @@ class SpectrogramToAudio(torch.nn.Module):
         assert F == self.F, f"Number of subbands F={F} does not match self.F={self.F}"
         input = input.view(B, -1, F, N)
 
-        with torch.cuda.amp.autocast(enabled=False):
+        with torch.amp.autocast('cuda', enabled=False):
             output = self.istft(input.cfloat())  # (B, C, T)
 
         if input_length is not None:
@@ -234,7 +234,7 @@ class MaskEstimatorGSS(torch.nn.Module):
         num_outputs = activity.size(1)
         assert activity.size(0) == B and activity.size(-1) == T
 
-        with torch.cuda.amp.autocast(enabled=False):
+        with torch.amp.autocast('cuda', enabled=False):
             input = input.to(dtype=self.dtype)
             z = self.normalize(input, dim=-3)
 
@@ -403,7 +403,7 @@ class MaskBasedDereverbWPE(torch.nn.Module):
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
         io_dtype = input.dtype
 
-        with torch.cuda.amp.autocast(enabled=False):
+        with torch.amp.autocast('cuda', enabled=False):
             output = input.to(dtype=self.dtype)
             if not output.is_complex():
                 raise RuntimeError(f"Expecting complex input, got {output.dtype}")
@@ -569,7 +569,7 @@ class ParametricMultichannelWienerFilter(torch.nn.Module):
     ) -> torch.Tensor:
         iodtype = input.dtype
 
-        with torch.cuda.amp.autocast(enabled=False):
+        with torch.amp.autocast('cuda', enabled=False):
             input = input.cdouble()
             mask_s = mask_s.double()
             mask_n = mask_n.double()

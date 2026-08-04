@@ -1,13 +1,17 @@
-"""Example: use standalone GSS stages with torch.Tensor and backprop.
+"""Example: use building-block modules with torch.Tensor and backprop.
 
-This script demonstrates training-friendly usage of:
-  - GSS.dereverberate
-  - GSS.estimate_masks
-  - GSS.beamform
+This script demonstrates training-friendly usage of the spectrogram-domain
+pipeline by calling the sub-modules directly:
 
-All three methods accept torch.Tensor input and preserve gradients for both
-audio and activity (requires aggregation="mean" or "max"; "any" breaks the
-activity gradient via boolean ops).
+    frontend.analysis  (AudioToSpectrogram)
+    frontend.dereverb  (MaskBasedDereverbWPE)
+    frontend.gss       (MaskEstimatorGSS)
+    frontend.mc        (MaskBasedBeamformer)
+    frontend.synthesis (SpectrogramToAudio)
+
+Working in spectrogram domain avoids redundant STFT/iSTFT round-trips when
+composing stages.  Gradients flow through audio and activity (requires
+aggregation="mean" or "max"; "any" breaks the activity gradient).
 
 Usage
 -----
@@ -20,7 +24,7 @@ import argparse
 
 import torch
 
-from gss_frontend import GSS
+from gss_frontend import GSS, activity_time_to_timefreq
 
 
 def make_toy_batch(
@@ -83,10 +87,27 @@ def main():
 
     audio_t, activity_t = make_toy_batch(device=args.device)
 
-    # Standalone pipeline with autograd.
-    dry_t = frontend.dereverberate(audio_t)
-    masks_t = frontend.estimate_masks(dry_t, activity_t)
-    out_t = frontend.beamform(dry_t, masks_t[0], masks_t.sum(dim=0) - masks_t[0])
+    # Spectrogram-domain pipeline — single STFT, no redundant round-trips.
+    audio_3d    = audio_t.unsqueeze(0)     # (1, ch, samples)
+    activity_3d = activity_t.unsqueeze(0)  # (1, spk, samples)
+
+    x_enc, _   = frontend.analysis(audio_3d)   # (1, ch, freq, frames)
+    x_enc, _   = frontend.dereverb(input=x_enc)
+
+    a_enc = activity_time_to_timefreq(
+        activity_3d,
+        win_length=frontend.fft_length,
+        hop_length=frontend.hop_length,
+        aggregation=frontend.activity_aggregation,
+    )                                           # (1, spk, frames)
+
+    masks      = frontend.gss(x_enc, a_enc)    # (1, spk, freq, frames)
+    mask_t     = masks[:, :1]
+    mask_u     = masks.sum(dim=1, keepdim=True) - mask_t
+
+    target_enc, _ = frontend.mc(input=x_enc, mask=mask_t, mask_undesired=mask_u)
+    out, _     = frontend.synthesis(input=target_enc)
+    out_t      = out[0, 0]                      # (samples,)
 
     # Dummy objective for demonstration.
     loss = out_t.abs().mean()
