@@ -237,11 +237,13 @@ If you use this repository in academic work, please cite the GSS/front-end
 processing papers it is based on:
 
 ```bibtex
-@inproceedings{boeddeker2018chime5_frontend,
-    author    = {Christoph Boeddeker and Jens Heitkaemper and Johannes Schmalenstroeer and Lukas Drude and Jahn Heymann and Reinhold Haeb-Umbach},
-    title     = {Front-end processing for the CHiME-5 dinner party scenario},
-    booktitle = {The 6th CHiME Workshop},
-    year      = {2018}
+@inproceedings{boeddecker18_chime,
+  title     = {{Front-end processing for the CHiME-5 dinner party scenario}},
+  author    = {Christoph Boeddecker and Jens Heitkaemper and Joerg Schmalenstroeer and Lukas Drude and Jahn Heymann and Reinhold Haeb-Umbach},
+  year      = {2018},
+  booktitle = {{5th International Workshop on Speech Processing in Everyday Environments (CHiME 2018)}},
+  pages     = {35--40},
+  doi       = {10.21437/CHiME.2018-8},
 }
 
 @inproceedings{raj23_interspeech,
