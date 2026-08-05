@@ -305,20 +305,22 @@ class GSS:
 
     def enhance(
         self,
-        audio: np.ndarray,
-        activity: np.ndarray,
+        audio: Union[np.ndarray, torch.Tensor],
+        activity: Union[np.ndarray, torch.Tensor],
         speaker_id: int,
         left_context: int = 0,
         right_context: int = 0,
         num_chunks: int = 1,
-    ) -> np.ndarray:
+    ) -> Union[np.ndarray, torch.Tensor]:
         """Enhance a single utterance.
 
         Parameters
         ----------
-        audio : np.ndarray, shape (channels, samples)
-            Multi-channel waveform (float32 recommended).
-        activity : np.ndarray, shape (speakers, samples)
+        audio : np.ndarray or torch.Tensor, shape (channels, samples)
+            Multi-channel waveform (float32 recommended).  When a
+            ``torch.Tensor`` is provided gradients are preserved and the
+            output is also a ``torch.Tensor``.
+        activity : np.ndarray or torch.Tensor, shape (speakers, samples)
             Speaker activity. Each row corresponds to one speaker; values may
             be binary {0, 1} or soft confidences in [0, 1].
         speaker_id : int
@@ -335,16 +337,12 @@ class GSS:
 
         Returns
         -------
-        np.ndarray, shape (samples_out,)
-            Single-channel enhanced waveform, float32.
+        np.ndarray or torch.Tensor, shape (samples_out,)
+            Single-channel enhanced waveform, float32.  Same type as *audio*.
             ``samples_out = len(audio[0]) - left_context - right_context``.
         """
-        audio_t = torch.from_numpy(audio).float().to(self.device)
-        activity_t = torch.from_numpy(activity).float().to(self.device)
-
-        # Add batch dimension: (1, channels, samples) / (1, speakers, samples)
-        audio_t = audio_t.unsqueeze(0)
-        activity_t = activity_t.unsqueeze(0)
+        audio_t, is_numpy = _prepare_audio(audio, self.device)
+        activity_t = _prepare_activity(activity, self.device)
 
         left_context_frames = samples_to_frames(
             left_context, self.fft_length, self.hop_length
@@ -353,7 +351,8 @@ class GSS:
             right_context, self.fft_length, self.hop_length
         )
 
-        with torch.inference_mode():
+        ctx = torch.inference_mode() if is_numpy else contextlib.nullcontext()
+        with ctx:
             result = self._enhance_tensor(
                 audio_t,
                 activity_t,
@@ -367,17 +366,21 @@ class GSS:
         result = result[left_context:]
         if right_context > 0:
             result = result[:-right_context]
+        if is_numpy:
+            return result.detach().cpu().numpy()
         return result
 
     def enhance_auto(
         self,
-        audio: np.ndarray,
-        activity: np.ndarray,
+        audio: Union[np.ndarray, torch.Tensor],
+        activity: Union[np.ndarray, torch.Tensor],
         speaker_id: int,
         left_context: int = 0,
         right_context: int = 0,
-    ) -> np.ndarray:
+    ) -> Union[np.ndarray, torch.Tensor]:
         """Same as :meth:`enhance` but retries with finer chunking on OOM.
+
+        Returns the same type as *audio* (``np.ndarray`` or ``torch.Tensor``).
 
         Automatically splits the frequency axis into more chunks when a CUDA
         out-of-memory error occurs.  The chunk counts used are all integer
@@ -385,10 +388,8 @@ class GSS:
         """
         import decimal
 
-        audio_t = torch.from_numpy(audio).float().to(self.device)
-        activity_t = torch.from_numpy(activity).float().to(self.device)
-        audio_t = audio_t.unsqueeze(0)
-        activity_t = activity_t.unsqueeze(0)
+        audio_t, is_numpy = _prepare_audio(audio, self.device)
+        activity_t = _prepare_activity(activity, self.device)
 
         left_context_frames = samples_to_frames(
             left_context, self.fft_length, self.hop_length
@@ -399,10 +400,11 @@ class GSS:
 
         num_chunks_list = _get_int_divisors(self.fft_length // 2 + 1)
 
+        ctx = torch.inference_mode() if is_numpy else contextlib.nullcontext()
         result = None
         for num_chunks in num_chunks_list:
             try:
-                with torch.inference_mode():
+                with ctx:
                     result = self._enhance_tensor(
                         audio_t,
                         activity_t,
@@ -426,7 +428,7 @@ class GSS:
                 "All GPU chunk sizes exhausted. Retrying with per-stage CPU fallback."
             )
             try:
-                with torch.inference_mode():
+                with ctx:
                     result = self._enhance_tensor(
                         audio_t,
                         activity_t,
@@ -438,13 +440,16 @@ class GSS:
                     )
             except Exception:
                 logger.exception("CPU fallback also failed. Falling back to channel 0.")
-                result = audio_t[0, 0].cpu().numpy()
+                result = audio_t[0, 0]
+                if is_numpy:
+                    return result.detach().cpu().numpy()
                 return result
 
         result = result[left_context:]
         if right_context > 0:
             result = result[:-right_context]
-
+        if is_numpy:
+            return result.detach().cpu().numpy()
         return result
 
     def estimate_masks(
@@ -513,7 +518,7 @@ class GSS:
 
         Returns
         -------
-        np.ndarray, shape (samples,)  — full output including context.
+        torch.Tensor, shape (samples,)  — full output including context.
         """
         # Analysis transform → complex spectrogram
         x_enc, _ = self.analysis(input=audio)          # (1, ch, freq, frames)
@@ -586,4 +591,4 @@ class GSS:
         # Synthesis transform → waveform
         target, _ = self.synthesis(input=target_enc)   # (1, 1, samples)
 
-        return target[0, 0].detach().cpu().numpy().squeeze()
+        return target[0, 0]
