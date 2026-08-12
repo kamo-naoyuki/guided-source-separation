@@ -1,13 +1,13 @@
 """Example: use building-block modules with torch.Tensor and backprop.
 
 This script demonstrates training-friendly usage of the spectrogram-domain
-pipeline by calling the sub-modules directly:
+pipeline by instantiating each module directly:
 
-    frontend.analysis  (AudioToSpectrogram)
-    frontend.dereverb  (MaskBasedDereverbWPE)
-    frontend.gss       (MaskEstimatorGSS)
-    frontend.mc        (MaskBasedBeamformer)
-    frontend.synthesis (SpectrogramToAudio)
+    AudioToSpectrogram
+    MaskBasedDereverbWPE
+    MaskEstimatorGSS
+    MaskBasedBeamformer
+    SpectrogramToAudio
 
 Working in spectrogram domain avoids redundant STFT/iSTFT round-trips when
 composing stages.  Gradients flow through audio and activity (requires
@@ -24,7 +24,17 @@ import argparse
 
 import torch
 
-from gss_frontend import GSS, activity_time_to_timefreq
+from gss_frontend import (
+    AudioToSpectrogram,
+    MaskBasedBeamformer,
+    MaskBasedDereverbWPE,
+    MaskEstimatorGSS,
+    SpectrogramToAudio,
+    activity_time_to_timefreq,
+)
+
+FFT_LENGTH  = 512
+HOP_LENGTH  = 128
 
 
 def make_toy_batch(
@@ -72,42 +82,38 @@ def main():
     parser = argparse.ArgumentParser(description="GSS Tensor/backprop demo")
     parser.add_argument("--device", default="cuda", help="torch device (default: cuda)")
     args = parser.parse_args()
+    device = args.device
 
-    frontend = GSS(
-        stft_fft_length=512,
-        stft_hop_length=128,
-        dereverb_filter_length=5,
-        dereverb_prediction_delay=2,
-        dereverb_num_iterations=1,
-        bss_iterations=4,
-        mc_ref_channel=0,
-        use_dtype=torch.cfloat,
-        device=args.device,
-    )
+    analysis  = AudioToSpectrogram(fft_length=FFT_LENGTH, hop_length=HOP_LENGTH).to(device)
+    synthesis = SpectrogramToAudio(fft_length=FFT_LENGTH, hop_length=HOP_LENGTH).to(device)
+    dereverb  = MaskBasedDereverbWPE(
+        filter_length=5, prediction_delay=2, num_iterations=1, dtype=torch.cfloat
+    ).to(device)
+    gss       = MaskEstimatorGSS(num_iterations=4, dtype=torch.cfloat).to(device)
+    mc        = MaskBasedBeamformer(ref_channel=0).to(device)
 
-    audio_t, activity_t = make_toy_batch(device=args.device)
+    audio_t, activity_t = make_toy_batch(device=device)
 
     # Spectrogram-domain pipeline — single STFT, no redundant round-trips.
     audio_3d    = audio_t.unsqueeze(0)     # (1, ch, samples)
     activity_3d = activity_t.unsqueeze(0)  # (1, spk, samples)
 
-    x_enc, _   = frontend.analysis(audio_3d)   # (1, ch, freq, frames)
-    x_enc, _   = frontend.dereverb(input=x_enc)
+    x_enc, _   = analysis(audio_3d)        # (1, ch, freq, frames)
+    x_enc, _   = dereverb(input=x_enc)
 
     a_enc = activity_time_to_timefreq(
         activity_3d,
-        win_length=frontend.fft_length,
-        hop_length=frontend.hop_length,
-        aggregation=frontend.activity_aggregation,
-    )                                           # (1, spk, frames)
+        win_length=FFT_LENGTH,
+        hop_length=HOP_LENGTH,
+    )                                      # (1, spk, frames)
 
-    masks      = frontend.gss(x_enc, a_enc)    # (1, spk, freq, frames)
+    masks      = gss(x_enc, a_enc)         # (1, spk, freq, frames)
     mask_t     = masks[:, :1]
     mask_u     = masks.sum(dim=1, keepdim=True) - mask_t
 
-    target_enc, _ = frontend.mc(input=x_enc, mask=mask_t, mask_undesired=mask_u)
-    out, _     = frontend.synthesis(input=target_enc)
-    out_t      = out[0, 0]                      # (samples,)
+    target_enc, _ = mc(input=x_enc, mask=mask_t, mask_undesired=mask_u)
+    out, _     = synthesis(input=target_enc)
+    out_t      = out[0, 0]                 # (samples,)
 
     # Dummy objective for demonstration.
     loss = out_t.abs().mean()
