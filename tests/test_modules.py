@@ -26,6 +26,7 @@ import math
 import pytest
 import numpy as np
 import torch
+import gss_frontend._frontend as frontend_module
 
 from gss_frontend._modules import (
     AudioToSpectrogram,
@@ -38,7 +39,13 @@ from gss_frontend._modules import (
     make_seq_mask_like,
 )
 from gss_frontend import GSS
-from gss_frontend._frontend import activity_time_to_timefreq, samples_to_frames
+from gss_frontend._frontend import (
+    activity_time_to_timefreq,
+    samples_to_frames,
+    _build_activity_from_diarization,
+    _load_diarization_segments,
+    _load_uem_regions,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -160,6 +167,732 @@ class TestUtilities:
                 win_length=FFT_LENGTH,
                 hop_length=HOP_LENGTH,
                 aggregation="median",
+            )
+
+
+class TestDiarizationHelpers:
+    def test_load_diarization_segments_from_dict(self, monkeypatch):
+        class _FakeMeetevalIO:
+            @staticmethod
+            def load(path, **kwargs):
+                assert path == "dummy.rttm"
+                assert kwargs.get("format") == "rttm"
+                return {
+                    "sessionA": [
+                        {"speaker": "spk1", "start": 0.0, "end": 0.5},
+                        {"speaker": "spk2", "start_time": 0.5, "end_time": 1.0},
+                    ]
+                }
+
+        monkeypatch.setattr(frontend_module, "_import_meeteval_io", lambda: _FakeMeetevalIO)
+        segments = _load_diarization_segments(
+            diarization="dummy.rttm",
+            diarization_format="rttm",
+            session_id="sessionA",
+        )
+        assert len(segments) == 2
+        assert segments[0]["speaker"] == "spk1"
+        assert segments[0]["session_id"] == "sessionA"
+        assert segments[1]["speaker"] == "spk2"
+
+    def test_load_diarization_segments_multi_file_concat(self, monkeypatch):
+        class _FakeMeetevalIO:
+            @staticmethod
+            def load(path, **kwargs):
+                if path == "part1.rttm":
+                    return [{"speaker": "spk1", "start": 0.1, "end": 0.5}]
+                if path == "part2.rttm":
+                    return [{"speaker": "spk1", "start": 0.2, "end": 0.4}]
+                raise AssertionError(path)
+
+        monkeypatch.setattr(frontend_module, "_import_meeteval_io", lambda: _FakeMeetevalIO)
+        segments = _load_diarization_segments(
+            diarization=["part1.rttm", "part2.rttm"],
+            time_concat=True,
+        )
+
+        assert len(segments) == 2
+        assert segments[0]["start"] == pytest.approx(0.1)
+        assert segments[0]["end"] == pytest.approx(0.5)
+        # part2 is shifted by part1 local end (=0.5)
+        assert segments[1]["start"] == pytest.approx(0.7)
+        assert segments[1]["end"] == pytest.approx(0.9)
+
+    def test_load_diarization_segments_multi_file_offsets(self, monkeypatch):
+        class _FakeMeetevalIO:
+            @staticmethod
+            def load(path, **kwargs):
+                if path == "part1.rttm":
+                    return [{"speaker": "spk1", "start": 0.1, "end": 0.5}]
+                if path == "part2.rttm":
+                    return [{"speaker": "spk1", "start": 0.2, "end": 0.4}]
+                raise AssertionError(path)
+
+        monkeypatch.setattr(frontend_module, "_import_meeteval_io", lambda: _FakeMeetevalIO)
+        segments = _load_diarization_segments(
+            diarization=["part1.rttm", "part2.rttm"],
+            diarization_offsets=[0.0, 2.0],
+        )
+
+        assert len(segments) == 2
+        assert segments[0]["start"] == pytest.approx(0.1)
+        assert segments[1]["start"] == pytest.approx(2.2)
+
+    def test_build_activity_from_diarization(self):
+        segments = [
+            {"speaker": "spk1", "start": 0.0, "end": 0.25},
+            {"speaker": "spk2", "start": 0.25, "end": 0.5},
+        ]
+        speakers = ["spk1", "spk2"]
+        activity = _build_activity_from_diarization(
+            segments=segments,
+            speakers=speakers,
+            num_samples=100,
+            sample_rate=100,
+        )
+        assert activity.shape == (2, 100)
+        assert np.all(activity[0, :25] == 1.0)
+        assert np.all(activity[0, 25:] == 0.0)
+        assert np.all(activity[1, :25] == 0.0)
+        assert np.all(activity[1, 25:50] == 1.0)
+
+    def test_load_uem_regions_from_dict(self, monkeypatch):
+        class _FakeMeetevalIO:
+            @staticmethod
+            def load(path, **kwargs):
+                assert path == "dummy.uem"
+                assert kwargs.get("format") == "uem"
+                return {
+                    "sessionA": [
+                        {"start_time": 0.1, "end_time": 0.9},
+                    ]
+                }
+
+        monkeypatch.setattr(frontend_module, "_import_meeteval_io", lambda: _FakeMeetevalIO)
+        regions = _load_uem_regions(
+            uem="dummy.uem",
+            uem_format="uem",
+            session_id="sessionA",
+        )
+        assert len(regions) == 1
+        assert regions[0]["session_id"] == "sessionA"
+        assert regions[0]["start"] == pytest.approx(0.1)
+        assert regions[0]["end"] == pytest.approx(0.9)
+
+    def test_enhance_from_diarization_calls_segment_enhancer(self, monkeypatch):
+        frontend = GSS(
+            stft_fft_length=FFT_LENGTH,
+            stft_hop_length=HOP_LENGTH,
+            dereverb_filter_length=5,
+            dereverb_num_iterations=1,
+            bss_iterations=2,
+            mc_ref_channel=0,
+            use_dtype=torch.cfloat,
+            device="cpu",
+        )
+
+        class _FakeMeetevalIO:
+            @staticmethod
+            def load(path, **kwargs):
+                assert path == "dummy.rttm"
+                return [
+                    {"speaker": "spkA", "start": 0.1, "end": 0.2},
+                    {"speaker": "spkB", "start": 0.2, "end": 0.3},
+                    {"speaker": "spkA", "start": 0.3, "end": 0.4},
+                ]
+
+        def _fake_torchaudio_load(path):
+            assert path == "dummy.wav"
+            return torch.zeros((N_CHANNELS, N_SAMPLES), dtype=torch.float32), SAMPLE_RATE
+
+        calls = []
+
+        def _fake_enhance_segment(**kwargs):
+            calls.append(kwargs)
+            seg_len = int(round((kwargs["segment_end"] - kwargs["segment_start"]) * kwargs["sample_rate"]))
+            return np.zeros((seg_len,), dtype=np.float32)
+
+        monkeypatch.setattr(frontend_module, "_import_meeteval_io", lambda: _FakeMeetevalIO)
+        monkeypatch.setattr("torchaudio.load", _fake_torchaudio_load)
+        monkeypatch.setattr(frontend, "enhance_segment", _fake_enhance_segment)
+
+        outputs = frontend.enhance_from_diarization(
+            audio_path="dummy.wav",
+            diarization="dummy.rttm",
+            speaker_id="spkA",
+            context_left_seconds=0.5,
+            context_right_seconds=0.5,
+        )
+
+        assert len(outputs) == 2
+        assert len(calls) == 2
+        assert all(out["speaker"] == "spkA" for out in outputs)
+        assert all(call["speaker_id"] == 0 for call in calls)
+
+    def test_enhance_from_diarization_accepts_int_speaker_id(self, monkeypatch):
+        frontend = GSS(device="cpu")
+
+        class _FakeMeetevalIO:
+            @staticmethod
+            def load(path, **kwargs):
+                assert path == "dummy.rttm"
+                return [
+                    {"speaker": "spkA", "start": 0.1, "end": 0.2},
+                    {"speaker": "spkB", "start": 0.2, "end": 0.3},
+                ]
+
+        def _fake_torchaudio_load(path):
+            assert path == "dummy.wav"
+            return torch.zeros((N_CHANNELS, N_SAMPLES), dtype=torch.float32), SAMPLE_RATE
+
+        calls = []
+
+        def _fake_enhance_segment(**kwargs):
+            calls.append(kwargs)
+            return np.zeros((16,), dtype=np.float32)
+
+        monkeypatch.setattr(frontend_module, "_import_meeteval_io", lambda: _FakeMeetevalIO)
+        monkeypatch.setattr("torchaudio.load", _fake_torchaudio_load)
+        monkeypatch.setattr(frontend, "enhance_segment", _fake_enhance_segment)
+
+        outputs = frontend.enhance_from_diarization(
+            audio_path="dummy.wav",
+            diarization="dummy.rttm",
+            speaker_id=1,
+        )
+
+        assert len(outputs) == 1
+        assert outputs[0]["speaker"] == "spkB"
+        assert len(calls) == 1
+        assert calls[0]["speaker_id"] == 1
+
+    def test_enhance_from_diarization_all_speakers_when_omitted(self, monkeypatch):
+        frontend = GSS(device="cpu")
+
+        class _FakeMeetevalIO:
+            @staticmethod
+            def load(path, **kwargs):
+                assert path == "dummy.rttm"
+                return [
+                    {"speaker": "spkA", "start": 0.1, "end": 0.2},
+                    {"speaker": "spkB", "start": 0.2, "end": 0.3},
+                    {"speaker": "spkA", "start": 0.3, "end": 0.4},
+                ]
+
+        def _fake_torchaudio_load(path):
+            assert path == "dummy.wav"
+            return torch.zeros((N_CHANNELS, N_SAMPLES), dtype=torch.float32), SAMPLE_RATE
+
+        calls = []
+
+        def _fake_enhance_segment(**kwargs):
+            calls.append(kwargs)
+            return np.zeros((16,), dtype=np.float32)
+
+        monkeypatch.setattr(frontend_module, "_import_meeteval_io", lambda: _FakeMeetevalIO)
+        monkeypatch.setattr("torchaudio.load", _fake_torchaudio_load)
+        monkeypatch.setattr(frontend, "enhance_segment", _fake_enhance_segment)
+
+        outputs = frontend.enhance_from_diarization(
+            audio_path="dummy.wav",
+            diarization="dummy.rttm",
+        )
+
+        assert len(outputs) == 3
+        assert [out["speaker"] for out in outputs] == ["spkA", "spkB", "spkA"]
+        assert [call["speaker_id"] for call in calls] == [0, 1, 0]
+
+    def test_enhance_from_diarization_supports_multiple_speakers(self, monkeypatch):
+        frontend = GSS(device="cpu")
+
+        class _FakeMeetevalIO:
+            @staticmethod
+            def load(path, **kwargs):
+                assert path == "dummy.rttm"
+                return [
+                    {"speaker": "spkA", "start": 0.1, "end": 0.2},
+                    {"speaker": "spkB", "start": 0.2, "end": 0.3},
+                    {"speaker": "spkC", "start": 0.3, "end": 0.4},
+                ]
+
+        def _fake_torchaudio_load(path):
+            assert path == "dummy.wav"
+            return torch.zeros((N_CHANNELS, N_SAMPLES), dtype=torch.float32), SAMPLE_RATE
+
+        calls = []
+
+        def _fake_enhance_segment(**kwargs):
+            calls.append(kwargs)
+            return np.zeros((16,), dtype=np.float32)
+
+        monkeypatch.setattr(frontend_module, "_import_meeteval_io", lambda: _FakeMeetevalIO)
+        monkeypatch.setattr("torchaudio.load", _fake_torchaudio_load)
+        monkeypatch.setattr(frontend, "enhance_segment", _fake_enhance_segment)
+
+        outputs = frontend.enhance_from_diarization(
+            audio_path="dummy.wav",
+            diarization="dummy.rttm",
+            speaker_id=["spkC", 0],
+        )
+
+        assert len(outputs) == 2
+        assert [out["speaker"] for out in outputs] == ["spkA", "spkC"]
+        assert [call["speaker_id"] for call in calls] == [0, 2]
+
+    def test_enhance_from_diarization_filters_segments_with_uem(self, monkeypatch):
+        frontend = GSS(device="cpu")
+
+        class _FakeMeetevalIO:
+            @staticmethod
+            def load(path, **kwargs):
+                if path == "dummy.rttm":
+                    return [
+                        {"speaker": "spkA", "start": 0.05, "end": 0.12},
+                        {"speaker": "spkA", "start": 0.20, "end": 0.28},
+                        {"speaker": "spkA", "start": 0.33, "end": 0.42},
+                    ]
+                if path == "dummy.uem":
+                    return [
+                        {"start": 0.10, "end": 0.35},
+                    ]
+                raise AssertionError(path)
+
+        def _fake_torchaudio_load(path):
+            assert path == "dummy.wav"
+            return torch.zeros((N_CHANNELS, N_SAMPLES), dtype=torch.float32), SAMPLE_RATE
+
+        calls = []
+
+        def _fake_enhance_segment(**kwargs):
+            calls.append(kwargs)
+            return np.zeros((16,), dtype=np.float32)
+
+        monkeypatch.setattr(frontend_module, "_import_meeteval_io", lambda: _FakeMeetevalIO)
+        monkeypatch.setattr("torchaudio.load", _fake_torchaudio_load)
+        monkeypatch.setattr(frontend, "enhance_segment", _fake_enhance_segment)
+
+        outputs = frontend.enhance_from_diarization(
+            audio_path="dummy.wav",
+            diarization="dummy.rttm",
+            uem="dummy.uem",
+            speaker_id="spkA",
+        )
+
+        assert len(outputs) == 1
+        assert len(calls) == 1
+        assert outputs[0]["segment_start"] == pytest.approx(0.20)
+        assert outputs[0]["segment_end"] == pytest.approx(0.28)
+
+    def test_enhance_from_diarization_caps_context_by_uem(self, monkeypatch):
+        frontend = GSS(device="cpu")
+
+        class _FakeMeetevalIO:
+            @staticmethod
+            def load(path, **kwargs):
+                if path == "dummy.rttm":
+                    return [
+                        {"speaker": "spkA", "start": 0.20, "end": 0.25},
+                    ]
+                if path == "dummy.uem":
+                    return [
+                        {"start": 0.18, "end": 0.26},
+                    ]
+                raise AssertionError(path)
+
+        def _fake_torchaudio_load(path):
+            assert path == "dummy.wav"
+            return torch.zeros((N_CHANNELS, N_SAMPLES), dtype=torch.float32), SAMPLE_RATE
+
+        calls = []
+
+        def _fake_enhance_segment(**kwargs):
+            calls.append(kwargs)
+            return np.zeros((16,), dtype=np.float32)
+
+        monkeypatch.setattr(frontend_module, "_import_meeteval_io", lambda: _FakeMeetevalIO)
+        monkeypatch.setattr("torchaudio.load", _fake_torchaudio_load)
+        monkeypatch.setattr(frontend, "enhance_segment", _fake_enhance_segment)
+
+        frontend.enhance_from_diarization(
+            audio_path="dummy.wav",
+            diarization="dummy.rttm",
+            uem="dummy.uem",
+            speaker_id="spkA",
+            context_left_seconds=0.5,
+            context_right_seconds=0.5,
+        )
+
+        assert len(calls) == 1
+        assert calls[0]["context_left_seconds"] == pytest.approx(0.02)
+        assert calls[0]["context_right_seconds"] == pytest.approx(0.01)
+
+    def test_enhance_from_diarization_filters_with_direct_valid_regions(self, monkeypatch):
+        frontend = GSS(device="cpu")
+
+        class _FakeMeetevalIO:
+            @staticmethod
+            def load(path, **kwargs):
+                if path == "dummy.rttm":
+                    return [
+                        {"speaker": "spkA", "start": 0.05, "end": 0.12},
+                        {"speaker": "spkA", "start": 0.20, "end": 0.28},
+                        {"speaker": "spkA", "start": 0.33, "end": 0.42},
+                    ]
+                raise AssertionError(path)
+
+        def _fake_torchaudio_load(path):
+            assert path == "dummy.wav"
+            return torch.zeros((N_CHANNELS, N_SAMPLES), dtype=torch.float32), SAMPLE_RATE
+
+        calls = []
+
+        def _fake_enhance_segment(**kwargs):
+            calls.append(kwargs)
+            return np.zeros((16,), dtype=np.float32)
+
+        monkeypatch.setattr(frontend_module, "_import_meeteval_io", lambda: _FakeMeetevalIO)
+        monkeypatch.setattr("torchaudio.load", _fake_torchaudio_load)
+        monkeypatch.setattr(frontend, "enhance_segment", _fake_enhance_segment)
+
+        outputs = frontend.enhance_from_diarization(
+            audio_path="dummy.wav",
+            diarization="dummy.rttm",
+            speaker_id="spkA",
+            valid_regions=[(0.10, 0.35)],
+        )
+
+        assert len(outputs) == 1
+        assert len(calls) == 1
+        assert outputs[0]["segment_start"] == pytest.approx(0.20)
+        assert outputs[0]["segment_end"] == pytest.approx(0.28)
+
+    def test_enhance_from_diarization_caps_context_by_direct_valid_regions(self, monkeypatch):
+        frontend = GSS(device="cpu")
+
+        class _FakeMeetevalIO:
+            @staticmethod
+            def load(path, **kwargs):
+                if path == "dummy.rttm":
+                    return [
+                        {"speaker": "spkA", "start": 0.20, "end": 0.25},
+                    ]
+                raise AssertionError(path)
+
+        def _fake_torchaudio_load(path):
+            assert path == "dummy.wav"
+            return torch.zeros((N_CHANNELS, N_SAMPLES), dtype=torch.float32), SAMPLE_RATE
+
+        calls = []
+
+        def _fake_enhance_segment(**kwargs):
+            calls.append(kwargs)
+            return np.zeros((16,), dtype=np.float32)
+
+        monkeypatch.setattr(frontend_module, "_import_meeteval_io", lambda: _FakeMeetevalIO)
+        monkeypatch.setattr("torchaudio.load", _fake_torchaudio_load)
+        monkeypatch.setattr(frontend, "enhance_segment", _fake_enhance_segment)
+
+        frontend.enhance_from_diarization(
+            audio_path="dummy.wav",
+            diarization="dummy.rttm",
+            speaker_id="spkA",
+            valid_regions=[{"start": 0.18, "end": 0.26}],
+            context_left_seconds=0.5,
+            context_right_seconds=0.5,
+        )
+
+        assert len(calls) == 1
+        assert calls[0]["context_left_seconds"] == pytest.approx(0.02)
+        assert calls[0]["context_right_seconds"] == pytest.approx(0.01)
+
+    def test_enhance_from_diarization_intersects_uem_and_direct_valid_regions(self, monkeypatch):
+        frontend = GSS(device="cpu")
+
+        class _FakeMeetevalIO:
+            @staticmethod
+            def load(path, **kwargs):
+                if path == "dummy.rttm":
+                    return [
+                        {"speaker": "spkA", "start": 0.20, "end": 0.24},
+                        {"speaker": "spkA", "start": 0.24, "end": 0.27},
+                    ]
+                if path == "dummy.uem":
+                    return [
+                        {"start": 0.15, "end": 0.26},
+                    ]
+                raise AssertionError(path)
+
+        def _fake_torchaudio_load(path):
+            assert path == "dummy.wav"
+            return torch.zeros((N_CHANNELS, N_SAMPLES), dtype=torch.float32), SAMPLE_RATE
+
+        calls = []
+
+        def _fake_enhance_segment(**kwargs):
+            calls.append(kwargs)
+            return np.zeros((16,), dtype=np.float32)
+
+        monkeypatch.setattr(frontend_module, "_import_meeteval_io", lambda: _FakeMeetevalIO)
+        monkeypatch.setattr("torchaudio.load", _fake_torchaudio_load)
+        monkeypatch.setattr(frontend, "enhance_segment", _fake_enhance_segment)
+
+        outputs = frontend.enhance_from_diarization(
+            audio_path="dummy.wav",
+            diarization="dummy.rttm",
+            speaker_id="spkA",
+            uem="dummy.uem",
+            valid_regions=[(0.18, 0.25)],
+        )
+
+        assert len(outputs) == 1
+        assert len(calls) == 1
+        assert outputs[0]["segment_start"] == pytest.approx(0.20)
+        assert outputs[0]["segment_end"] == pytest.approx(0.24)
+
+    def test_enhance_from_diarization_multi_file_audio_trim_mode(self, monkeypatch):
+        frontend = GSS(device="cpu")
+
+        class _FakeMeetevalIO:
+            @staticmethod
+            def load(path, **kwargs):
+                assert path == "dummy.rttm"
+                return [{"speaker": "spkA", "start": 0.1, "end": 0.2}]
+
+        def _fake_torchaudio_load(path):
+            if path == "ch0.wav":
+                return torch.zeros((1, 16000), dtype=torch.float32), SAMPLE_RATE
+            if path == "ch1.wav":
+                return torch.zeros((1, 14000), dtype=torch.float32), SAMPLE_RATE
+            raise AssertionError(path)
+
+        calls = []
+
+        def _fake_enhance_segment(**kwargs):
+            calls.append(kwargs)
+            # Trim mode should align both channels to shortest length.
+            assert kwargs["audio"].shape == (2, 14000)
+            assert kwargs["activity"].shape[-1] == 14000
+            return np.zeros((16,), dtype=np.float32)
+
+        monkeypatch.setattr(frontend_module, "_import_meeteval_io", lambda: _FakeMeetevalIO)
+        monkeypatch.setattr("torchaudio.load", _fake_torchaudio_load)
+        monkeypatch.setattr(frontend, "enhance_segment", _fake_enhance_segment)
+
+        outputs = frontend.enhance_from_diarization(
+            audio_path=["ch0.wav", "ch1.wav"],
+            diarization="dummy.rttm",
+            speaker_id="spkA",
+            channel_length_mode="trim",
+        )
+
+        assert len(outputs) == 1
+        assert len(calls) == 1
+
+    def test_enhance_from_diarization_multi_file_audio_error_mode(self, monkeypatch):
+        frontend = GSS(device="cpu")
+
+        class _FakeMeetevalIO:
+            @staticmethod
+            def load(path, **kwargs):
+                assert path == "dummy.rttm"
+                return [{"speaker": "spkA", "start": 0.1, "end": 0.2}]
+
+        def _fake_torchaudio_load(path):
+            if path == "ch0.wav":
+                return torch.zeros((1, 16000), dtype=torch.float32), SAMPLE_RATE
+            if path == "ch1.wav":
+                return torch.zeros((1, 14000), dtype=torch.float32), SAMPLE_RATE
+            raise AssertionError(path)
+
+        monkeypatch.setattr(frontend_module, "_import_meeteval_io", lambda: _FakeMeetevalIO)
+        monkeypatch.setattr("torchaudio.load", _fake_torchaudio_load)
+
+        with pytest.raises(ValueError):
+            frontend.enhance_from_diarization(
+                audio_path=["ch0.wav", "ch1.wav"],
+                diarization="dummy.rttm",
+                speaker_id="spkA",
+                channel_length_mode="error",
+            )
+
+    def test_enhance_from_diarization_multi_file_audio_pad_mode(self, monkeypatch):
+        frontend = GSS(device="cpu")
+
+        class _FakeMeetevalIO:
+            @staticmethod
+            def load(path, **kwargs):
+                assert path == "dummy.rttm"
+                return [{"speaker": "spkA", "start": 0.1, "end": 0.2}]
+
+        def _fake_torchaudio_load(path):
+            if path == "ch0.wav":
+                return torch.zeros((1, 16000), dtype=torch.float32), SAMPLE_RATE
+            if path == "ch1.wav":
+                return torch.zeros((1, 14000), dtype=torch.float32), SAMPLE_RATE
+            raise AssertionError(path)
+
+        calls = []
+
+        def _fake_enhance_segment(**kwargs):
+            calls.append(kwargs)
+            # Pad mode should align both channels to longest length.
+            assert kwargs["audio"].shape == (2, 16000)
+            assert kwargs["activity"].shape[-1] == 16000
+            return np.zeros((16,), dtype=np.float32)
+
+        monkeypatch.setattr(frontend_module, "_import_meeteval_io", lambda: _FakeMeetevalIO)
+        monkeypatch.setattr("torchaudio.load", _fake_torchaudio_load)
+        monkeypatch.setattr(frontend, "enhance_segment", _fake_enhance_segment)
+
+        outputs = frontend.enhance_from_diarization(
+            audio_path=["ch0.wav", "ch1.wav"],
+            diarization="dummy.rttm",
+            speaker_id="spkA",
+            channel_length_mode="pad",
+        )
+
+        assert len(outputs) == 1
+        assert len(calls) == 1
+
+    def test_enhance_from_diarization_applies_channel_offsets_samples(self, monkeypatch):
+        frontend = GSS(device="cpu")
+
+        class _FakeMeetevalIO:
+            @staticmethod
+            def load(path, **kwargs):
+                assert path == "dummy.rttm"
+                return [{"speaker": "spkA", "start": 0.0, "end": 0.002}]
+
+        def _fake_torchaudio_load(path):
+            if path == "ch0.wav":
+                return torch.tensor([[1.0, 1.0, 1.0, 1.0]], dtype=torch.float32), SAMPLE_RATE
+            if path == "ch1.wav":
+                return torch.tensor([[2.0, 2.0, 2.0, 2.0]], dtype=torch.float32), SAMPLE_RATE
+            raise AssertionError(path)
+
+        calls = []
+
+        def _fake_enhance_segment(**kwargs):
+            calls.append(kwargs)
+            audio = kwargs["audio"]
+            # ch1 delayed by +2 samples then trimmed to match shortest length.
+            np.testing.assert_allclose(audio[0], np.array([1.0, 1.0, 1.0, 1.0], dtype=np.float32))
+            np.testing.assert_allclose(audio[1], np.array([0.0, 0.0, 2.0, 2.0], dtype=np.float32))
+            return np.zeros((8,), dtype=np.float32)
+
+        monkeypatch.setattr(frontend_module, "_import_meeteval_io", lambda: _FakeMeetevalIO)
+        monkeypatch.setattr("torchaudio.load", _fake_torchaudio_load)
+        monkeypatch.setattr(frontend, "enhance_segment", _fake_enhance_segment)
+
+        outputs = frontend.enhance_from_diarization(
+            audio_path=["ch0.wav", "ch1.wav"],
+            diarization="dummy.rttm",
+            speaker_id="spkA",
+            channel_length_mode="trim",
+            channel_offsets=[0, 2],
+            channel_offset_unit="samples",
+        )
+
+        assert len(outputs) == 1
+        assert len(calls) == 1
+
+    def test_enhance_from_diarization_multi_rttm_concat(self, monkeypatch):
+        frontend = GSS(device="cpu")
+
+        class _FakeMeetevalIO:
+            @staticmethod
+            def load(path, **kwargs):
+                if path == "part1.rttm":
+                    return [{"speaker": "spkA", "start": 0.1, "end": 0.2}]
+                if path == "part2.rttm":
+                    return [{"speaker": "spkA", "start": 0.1, "end": 0.2}]
+                raise AssertionError(path)
+
+        def _fake_torchaudio_load(path):
+            assert path == "dummy.wav"
+            return torch.zeros((N_CHANNELS, N_SAMPLES), dtype=torch.float32), SAMPLE_RATE
+
+        calls = []
+
+        def _fake_enhance_segment(**kwargs):
+            calls.append(kwargs)
+            return np.zeros((8,), dtype=np.float32)
+
+        monkeypatch.setattr(frontend_module, "_import_meeteval_io", lambda: _FakeMeetevalIO)
+        monkeypatch.setattr("torchaudio.load", _fake_torchaudio_load)
+        monkeypatch.setattr(frontend, "enhance_segment", _fake_enhance_segment)
+
+        outputs = frontend.enhance_from_diarization(
+            audio_path="dummy.wav",
+            diarization=["part1.rttm", "part2.rttm"],
+            speaker_id="spkA",
+            diarization_time_concat=True,
+        )
+
+        assert len(outputs) == 2
+        assert calls[0]["segment_start"] == pytest.approx(0.1)
+        # part2 is shifted by part1 end (=0.2)
+        assert calls[1]["segment_start"] == pytest.approx(0.3)
+
+    def test_enhance_from_diarization_multi_rttm_default_is_merge(self, monkeypatch):
+        frontend = GSS(device="cpu")
+
+        class _FakeMeetevalIO:
+            @staticmethod
+            def load(path, **kwargs):
+                if path == "spkA.rttm":
+                    return [{"speaker": "spkA", "start": 0.1, "end": 0.2}]
+                if path == "spkB.rttm":
+                    return [{"speaker": "spkB", "start": 0.1, "end": 0.2}]
+                raise AssertionError(path)
+
+        def _fake_torchaudio_load(path):
+            assert path == "dummy.wav"
+            return torch.zeros((N_CHANNELS, N_SAMPLES), dtype=torch.float32), SAMPLE_RATE
+
+        calls = []
+
+        def _fake_enhance_segment(**kwargs):
+            calls.append(kwargs)
+            return np.zeros((8,), dtype=np.float32)
+
+        monkeypatch.setattr(frontend_module, "_import_meeteval_io", lambda: _FakeMeetevalIO)
+        monkeypatch.setattr("torchaudio.load", _fake_torchaudio_load)
+        monkeypatch.setattr(frontend, "enhance_segment", _fake_enhance_segment)
+
+        outputs = frontend.enhance_from_diarization(
+            audio_path="dummy.wav",
+            diarization=["spkA.rttm", "spkB.rttm"],
+            speaker_id=None,
+        )
+
+        assert len(outputs) == 2
+        # merge mode keeps original timestamps (no sequential shift)
+        assert calls[0]["segment_start"] == pytest.approx(0.1)
+        assert calls[1]["segment_start"] == pytest.approx(0.1)
+
+    def test_enhance_from_diarization_channel_offsets_length_mismatch_raises(self, monkeypatch):
+        frontend = GSS(device="cpu")
+
+        class _FakeMeetevalIO:
+            @staticmethod
+            def load(path, **kwargs):
+                assert path == "dummy.rttm"
+                return [{"speaker": "spkA", "start": 0.0, "end": 0.01}]
+
+        def _fake_torchaudio_load(path):
+            assert path == "dummy.wav"
+            return torch.zeros((2, 16), dtype=torch.float32), SAMPLE_RATE
+
+        monkeypatch.setattr(frontend_module, "_import_meeteval_io", lambda: _FakeMeetevalIO)
+        monkeypatch.setattr("torchaudio.load", _fake_torchaudio_load)
+
+        with pytest.raises(ValueError):
+            frontend.enhance_from_diarization(
+                audio_path="dummy.wav",
+                diarization="dummy.rttm",
+                speaker_id="spkA",
+                channel_offsets=[0],
             )
 
 
@@ -411,6 +1144,156 @@ class TestGSSEnhance:
         out2 = frontend.enhance(audio, activity, speaker_id=0, num_chunks=2)
         np.testing.assert_allclose(out1, out2, rtol=1e-4, atol=1e-5)
 
+    def test_enhance_segment_default_context_matches_manual_window(self, frontend):
+        audio, activity = self._make_inputs()
+        seg_start_s = 0.2
+        seg_end_s = 0.7
+
+        out_segment = frontend.enhance_segment(
+            audio,
+            activity,
+            speaker_id=0,
+            segment_start=seg_start_s,
+            segment_end=seg_end_s,
+            sample_rate=SAMPLE_RATE,
+        )
+
+        seg_start = int(round(seg_start_s * SAMPLE_RATE))
+        seg_end = int(round(seg_end_s * SAMPLE_RATE))
+        left_ctx = int(round(15.0 * SAMPLE_RATE))
+        right_ctx = int(round(15.0 * SAMPLE_RATE))
+        win_start = max(0, seg_start - left_ctx)
+        win_end = min(audio.shape[-1], seg_end + right_ctx)
+
+        out_manual = frontend.enhance(
+            audio[..., win_start:win_end],
+            activity[..., win_start:win_end],
+            speaker_id=0,
+            left_context=seg_start - win_start,
+            right_context=win_end - seg_end,
+        )
+
+        np.testing.assert_allclose(out_segment, out_manual, rtol=1e-5, atol=1e-6)
+
+    def test_enhance_segment_seconds_and_samples_match(self, frontend):
+        audio, activity = self._make_inputs()
+        seg_start = int(0.25 * SAMPLE_RATE)
+        seg_end = int(0.75 * SAMPLE_RATE)
+
+        out_seconds = frontend.enhance_segment(
+            audio,
+            activity,
+            speaker_id=1,
+            segment_start=seg_start / SAMPLE_RATE,
+            segment_end=seg_end / SAMPLE_RATE,
+            sample_rate=SAMPLE_RATE,
+            context_left_seconds=0.1,
+            context_right_seconds=0.2,
+            segment_unit="seconds",
+        )
+        out_samples = frontend.enhance_segment(
+            audio,
+            activity,
+            speaker_id=1,
+            segment_start=seg_start,
+            segment_end=seg_end,
+            sample_rate=SAMPLE_RATE,
+            context_left_seconds=0.1,
+            context_right_seconds=0.2,
+            segment_unit="samples",
+        )
+
+        np.testing.assert_allclose(out_seconds, out_samples, rtol=1e-5, atol=1e-6)
+
+    def test_enhance_segment_oom_fallback_mode_matches_manual_auto_window(self, frontend):
+        audio, activity = self._make_inputs()
+        seg_start_s = 0.2
+        seg_end_s = 0.7
+
+        out_segment = frontend.enhance_segment(
+            audio,
+            activity,
+            speaker_id=0,
+            segment_start=seg_start_s,
+            segment_end=seg_end_s,
+            sample_rate=SAMPLE_RATE,
+            mode="oom_fallback",
+        )
+
+        seg_start = int(round(seg_start_s * SAMPLE_RATE))
+        seg_end = int(round(seg_end_s * SAMPLE_RATE))
+        left_ctx = int(round(15.0 * SAMPLE_RATE))
+        right_ctx = int(round(15.0 * SAMPLE_RATE))
+        win_start = max(0, seg_start - left_ctx)
+        win_end = min(audio.shape[-1], seg_end + right_ctx)
+
+        out_manual = frontend.enhance_auto(
+            audio[..., win_start:win_end],
+            activity[..., win_start:win_end],
+            speaker_id=0,
+            left_context=seg_start - win_start,
+            right_context=win_end - seg_end,
+        )
+
+        np.testing.assert_allclose(out_segment, out_manual, rtol=1e-5, atol=1e-6)
+
+    def test_enhance_segment_legacy_mode_aliases_are_supported(self, frontend):
+        audio, activity = self._make_inputs()
+
+        out_new_standard = frontend.enhance_segment(
+            audio,
+            activity,
+            speaker_id=0,
+            segment_start=0.2,
+            segment_end=0.7,
+            sample_rate=SAMPLE_RATE,
+            mode="standard",
+        )
+        out_old_enhance = frontend.enhance_segment(
+            audio,
+            activity,
+            speaker_id=0,
+            segment_start=0.2,
+            segment_end=0.7,
+            sample_rate=SAMPLE_RATE,
+            mode="enhance",
+        )
+        np.testing.assert_allclose(out_new_standard, out_old_enhance, rtol=1e-5, atol=1e-6)
+
+        out_new_fallback = frontend.enhance_segment(
+            audio,
+            activity,
+            speaker_id=0,
+            segment_start=0.2,
+            segment_end=0.7,
+            sample_rate=SAMPLE_RATE,
+            mode="oom_fallback",
+        )
+        out_old_auto = frontend.enhance_segment(
+            audio,
+            activity,
+            speaker_id=0,
+            segment_start=0.2,
+            segment_end=0.7,
+            sample_rate=SAMPLE_RATE,
+            mode="auto",
+        )
+        np.testing.assert_allclose(out_new_fallback, out_old_auto, rtol=1e-5, atol=1e-6)
+
+    def test_enhance_segment_invalid_mode_raises(self, frontend):
+        audio, activity = self._make_inputs()
+
+        with pytest.raises(ValueError):
+            frontend.enhance_segment(
+                audio,
+                activity,
+                speaker_id=0,
+                segment_start=0.1,
+                segment_end=0.2,
+                sample_rate=SAMPLE_RATE,
+                mode="unknown",
+            )
+
 
 # ---------------------------------------------------------------------------
 # Standalone pipeline stages
@@ -445,9 +1328,25 @@ class TestGSSStandaloneAPIs:
         audio, activity = self._make_inputs()
         masks = frontend.estimate_masks(audio, activity)
         F = FFT_LENGTH // 2 + 1
-        assert masks.shape[0] == N_SPEAKERS
+        assert masks.shape[0] == N_SPEAKERS + 1
         assert masks.shape[1] == F
         assert masks.ndim == 3
+
+    def test_estimate_masks_output_shape_without_garbage_class(self):
+        frontend = GSS(
+            stft_fft_length=FFT_LENGTH,
+            stft_hop_length=HOP_LENGTH,
+            dereverb_filter_length=5,
+            dereverb_num_iterations=1,
+            bss_iterations=2,
+            mc_ref_channel=0,
+            use_dtype=torch.cfloat,
+            garbage_class=False,
+            device="cpu",
+        )
+        audio, activity = self._make_inputs()
+        masks = frontend.estimate_masks(audio, activity)
+        assert masks.shape[0] == N_SPEAKERS
 
     def test_estimate_masks_range(self, frontend):
         audio, activity = self._make_inputs()

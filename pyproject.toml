@@ -13,6 +13,11 @@ dependencies = [
     "numpy",
 ]
 
+[project.optional-dependencies]
+diarization = [
+    "meeteval",
+]
+
 [tool.setuptools.packages.find]
 where = ["src"]
 

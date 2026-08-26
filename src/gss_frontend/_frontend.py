@@ -25,7 +25,7 @@ Requires:
 import math
 import logging
 import contextlib
-from typing import Union, Optional
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import torch
@@ -187,6 +187,581 @@ def _prepare_activity(
     return t.to(device)
 
 
+def _append_garbage_activity_class(
+    activity: torch.Tensor,
+    enabled: bool,
+) -> torch.Tensor:
+    """Append one always-active garbage/background class when enabled."""
+    if not enabled:
+        return activity
+    garbage = torch.full(
+        (activity.size(0), 1, activity.size(-1)),
+        fill_value=1.0,
+        dtype=activity.dtype,
+        device=activity.device,
+    )
+    return torch.cat((activity, garbage), dim=1)
+
+
+def _to_sample_index(value: Union[int, float], sample_rate: int, unit: str) -> int:
+    """Convert a time/sample index to integer sample index."""
+    if unit == "samples":
+        return int(value)
+    if unit == "seconds":
+        return int(round(float(value) * sample_rate))
+    raise ValueError("segment_unit must be either 'samples' or 'seconds'.")
+
+
+def _validate_segment_mode(mode: str) -> str:
+    """Validate enhance mode for :meth:`GSS.enhance_segment`."""
+    aliases = {
+        "enhance": "standard",
+        "auto": "oom_fallback",
+    }
+    if mode in aliases:
+        new_mode = aliases[mode]
+        logger.warning(
+            "mode='%s' is deprecated and will be removed in a future release; "
+            "use mode='%s' instead.",
+            mode,
+            new_mode,
+        )
+        return new_mode
+
+    valid_modes = ("standard", "oom_fallback")
+    if mode not in valid_modes:
+        raise ValueError(
+            f"mode must be one of {valid_modes}, got '{mode}'."
+        )
+    return mode
+
+
+def _import_meeteval_io():
+    """Import ``meeteval.io`` with a clear optional-dependency error."""
+    try:
+        from meeteval import io as meeteval_io
+    except ImportError as exc:
+        raise ImportError(
+            "Optional dependency 'meeteval' is required for diarization loading. "
+            "Install with: pip install 'gss-frontend[diarization]'"
+        ) from exc
+    return meeteval_io
+
+
+def _segment_to_dict(segment: Any, default_session: Optional[str] = None) -> Dict[str, Any]:
+    """Normalize one diarization segment object to a dict.
+
+    Expected normalized keys are: ``session_id``, ``speaker``, ``start``, ``end``
+    where time values are in seconds.
+    """
+
+    def _get(names):
+        if isinstance(segment, dict):
+            for name in names:
+                if name in segment:
+                    return segment[name]
+            return None
+        for name in names:
+            if hasattr(segment, name):
+                return getattr(segment, name)
+        return None
+
+    if isinstance(segment, (tuple, list)):
+        if len(segment) == 4:
+            session_id, speaker, start, end = segment
+            return {
+                "session_id": str(session_id) if session_id is not None else default_session,
+                "speaker": str(speaker),
+                "start": float(start),
+                "end": float(end),
+            }
+        if len(segment) == 3:
+            speaker, start, end = segment
+            return {
+                "session_id": default_session,
+                "speaker": str(speaker),
+                "start": float(start),
+                "end": float(end),
+            }
+
+    start = _get(("start", "start_time", "begin", "offset"))
+    end = _get(("end", "end_time", "stop"))
+    duration = _get(("duration", "dur"))
+    speaker = _get(("speaker", "speaker_id", "label"))
+    session_id = _get(("session_id", "recording_id", "file_id", "example_id"))
+
+    if end is None and start is not None and duration is not None:
+        end = float(start) + float(duration)
+
+    if speaker is None or start is None or end is None:
+        raise ValueError(f"Could not parse diarization segment: {segment!r}")
+
+    return {
+        "session_id": str(session_id) if session_id is not None else default_session,
+        "speaker": str(speaker),
+        "start": float(start),
+        "end": float(end),
+    }
+
+
+def _load_diarization_segments(
+    diarization: Union[str, Sequence[str]],
+    diarization_format: Optional[str] = None,
+    session_id: Optional[str] = None,
+    time_concat: bool = False,
+    concat_gap_seconds: float = 0.0,
+    diarization_offsets: Optional[Sequence[Union[int, float]]] = None,
+) -> List[Dict[str, Any]]:
+    """Load and normalize diarization segments via ``meeteval.io.load``."""
+    meeteval_io = _import_meeteval_io()
+    kwargs = {}
+    if diarization_format is not None:
+        kwargs["format"] = diarization_format
+
+    if concat_gap_seconds < 0:
+        raise ValueError("concat_gap_seconds must be >= 0.")
+
+    if isinstance(diarization, str):
+        paths = [diarization]
+    elif isinstance(diarization, Sequence) and not isinstance(diarization, (bytes, bytearray)):
+        paths = list(diarization)
+        if not paths:
+            raise ValueError("diarization sequence must not be empty.")
+        if not all(isinstance(path, str) for path in paths):
+            raise TypeError("diarization entries must be file path strings.")
+    else:
+        raise TypeError("diarization must be str or sequence of file paths.")
+
+    if diarization_offsets is not None:
+        if len(diarization_offsets) != len(paths):
+            raise ValueError(
+                "diarization_offsets length must match number of diarization files. "
+                f"Got {len(diarization_offsets)} offsets for {len(paths)} files."
+            )
+        if time_concat:
+            raise ValueError("Use either time_concat=True or diarization_offsets, not both.")
+
+    segments: List[Dict[str, Any]] = []
+    running_offset = 0.0
+    for idx, path in enumerate(paths):
+        loaded = meeteval_io.load(path, **kwargs)
+
+        cur_segments: List[Dict[str, Any]] = []
+        if isinstance(loaded, dict):
+            for loaded_session, loaded_segments in loaded.items():
+                for segment in loaded_segments:
+                    cur_segments.append(_segment_to_dict(segment, default_session=str(loaded_session)))
+        else:
+            for segment in loaded:
+                cur_segments.append(_segment_to_dict(segment))
+
+        if session_id is not None:
+            cur_segments = [s for s in cur_segments if s["session_id"] == session_id]
+
+        shift = 0.0
+        if diarization_offsets is not None:
+            shift = float(diarization_offsets[idx])
+        elif time_concat:
+            shift = running_offset
+
+        if shift != 0.0:
+            cur_segments = [
+                {
+                    **s,
+                    "start": float(s["start"]) + shift,
+                    "end": float(s["end"]) + shift,
+                }
+                for s in cur_segments
+            ]
+
+        segments.extend(cur_segments)
+
+        if time_concat:
+            if cur_segments:
+                local_end = max(float(s["end"]) - shift for s in cur_segments)
+            else:
+                local_end = 0.0
+            running_offset += local_end + concat_gap_seconds
+
+    segments = [s for s in segments if s["end"] > s["start"]]
+    segments.sort(key=lambda s: (s["start"], s["end"], s["speaker"]))
+
+    if not segments:
+        if session_id is None:
+            raise ValueError("No valid diarization segments were loaded.")
+        raise ValueError(
+            f"No valid diarization segments were found for session_id='{session_id}'."
+        )
+    return segments
+
+
+def _interval_to_dict(interval: Any, default_session: Optional[str] = None) -> Dict[str, Any]:
+    """Normalize one interval object to a dict with ``session_id``, ``start``, ``end``."""
+
+    def _get(names):
+        if isinstance(interval, dict):
+            for name in names:
+                if name in interval:
+                    return interval[name]
+            return None
+        for name in names:
+            if hasattr(interval, name):
+                return getattr(interval, name)
+        return None
+
+    if isinstance(interval, (tuple, list)):
+        if len(interval) == 3:
+            session_id, start, end = interval
+            return {
+                "session_id": str(session_id) if session_id is not None else default_session,
+                "start": float(start),
+                "end": float(end),
+            }
+        if len(interval) == 2:
+            start, end = interval
+            return {
+                "session_id": default_session,
+                "start": float(start),
+                "end": float(end),
+            }
+
+    start = _get(("start", "start_time", "begin", "offset", "begin_time"))
+    end = _get(("end", "end_time", "stop"))
+    duration = _get(("duration", "dur"))
+    session_id = _get(("session_id", "recording_id", "file_id", "example_id", "filename"))
+
+    if end is None and start is not None and duration is not None:
+        end = float(start) + float(duration)
+
+    if start is None or end is None:
+        raise ValueError(f"Could not parse interval: {interval!r}")
+
+    return {
+        "session_id": str(session_id) if session_id is not None else default_session,
+        "start": float(start),
+        "end": float(end),
+    }
+
+
+def _load_uem_regions(
+    uem: str,
+    uem_format: Optional[str] = None,
+    session_id: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Load and normalize UEM regions via ``meeteval.io.load``."""
+    meeteval_io = _import_meeteval_io()
+    kwargs = {}
+    if uem_format is not None:
+        kwargs["format"] = uem_format
+    loaded = meeteval_io.load(uem, **kwargs)
+
+    regions: List[Dict[str, Any]] = []
+    if isinstance(loaded, dict):
+        for loaded_session, loaded_regions in loaded.items():
+            for region in loaded_regions:
+                regions.append(_interval_to_dict(region, default_session=str(loaded_session)))
+    else:
+        for region in loaded:
+            regions.append(_interval_to_dict(region))
+
+    if session_id is not None:
+        regions = [r for r in regions if r["session_id"] == session_id]
+
+    regions = [r for r in regions if r["end"] > r["start"]]
+    regions.sort(key=lambda r: (r["start"], r["end"]))
+    if not regions:
+        if session_id is None:
+            raise ValueError("No valid UEM regions were loaded.")
+        raise ValueError(f"No valid UEM regions were found for session_id='{session_id}'.")
+    return regions
+
+
+def _find_valid_region_for_segment(
+    segment: Dict[str, Any],
+    valid_regions: List[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    """Return a valid region that fully contains *segment* (or None)."""
+    eps = 1e-8
+    candidates = [
+        region
+        for region in valid_regions
+        if segment["start"] >= region["start"] - eps and segment["end"] <= region["end"] + eps
+    ]
+    if not candidates:
+        return None
+    # Prefer the widest allowed region to maximize available context.
+    return max(candidates, key=lambda region: region["end"] - region["start"])
+
+
+def _load_valid_regions_arg(
+    valid_regions: Union[Sequence[Any], Dict[str, Any]],
+    session_id: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Normalize user-provided valid regions argument.
+
+    Supported shapes:
+    - ``[(start, end), ...]``
+    - ``[{"start": ..., "end": ...}, ...]``
+    - ``{session_id: [(start, end), ...], ...}``
+    """
+    regions: List[Dict[str, Any]] = []
+
+    if isinstance(valid_regions, dict):
+        for region_session, region_values in valid_regions.items():
+            default_session = str(region_session)
+            if isinstance(region_values, (list, tuple)):
+                # Either one interval tuple/list or a list of interval items.
+                if len(region_values) == 2 and not isinstance(region_values[0], (dict, list, tuple)):
+                    regions.append(_interval_to_dict(region_values, default_session=default_session))
+                else:
+                    for region in region_values:
+                        regions.append(_interval_to_dict(region, default_session=default_session))
+            else:
+                regions.append(_interval_to_dict(region_values, default_session=default_session))
+    else:
+        for region in valid_regions:
+            regions.append(_interval_to_dict(region, default_session=session_id))
+
+    if session_id is not None:
+        regions = [r for r in regions if r["session_id"] == session_id]
+
+    regions = [r for r in regions if r["end"] > r["start"]]
+    regions.sort(key=lambda r: (r["start"], r["end"]))
+    if not regions:
+        if session_id is None:
+            raise ValueError("No valid regions were provided.")
+        raise ValueError(f"No valid regions were found for session_id='{session_id}'.")
+    return regions
+
+
+def _intersect_valid_regions(
+    left: List[Dict[str, Any]],
+    right: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Return intersection of two valid-region lists."""
+    intersections: List[Dict[str, Any]] = []
+    for a in left:
+        for b in right:
+            if a.get("session_id") != b.get("session_id"):
+                continue
+            start = max(a["start"], b["start"])
+            end = min(a["end"], b["end"])
+            if end > start:
+                intersections.append(
+                    {
+                        "session_id": a.get("session_id"),
+                        "start": float(start),
+                        "end": float(end),
+                    }
+                )
+    intersections.sort(key=lambda r: (r["start"], r["end"]))
+    return intersections
+
+
+def _validate_channel_length_mode(mode: str) -> str:
+    """Validate channel length mismatch handling mode."""
+    valid = ("error", "trim", "pad")
+    if mode not in valid:
+        raise ValueError(f"channel_length_mode must be one of {valid}, got '{mode}'.")
+    return mode
+
+
+def _validate_offset_unit(unit: str) -> str:
+    """Validate per-channel offset unit."""
+    valid = ("samples", "seconds")
+    if unit not in valid:
+        raise ValueError(f"channel_offset_unit must be one of {valid}, got '{unit}'.")
+    return unit
+
+
+def _match_channel_lengths(
+    channels: List[np.ndarray],
+    channel_length_mode: str,
+) -> List[np.ndarray]:
+    """Match channel lengths according to requested mode."""
+    lengths = [ch.shape[-1] for ch in channels]
+    if len(set(lengths)) == 1:
+        return channels
+
+    if channel_length_mode == "error":
+        raise ValueError(
+            "Channel lengths do not match across audio inputs: "
+            f"{lengths}. Set channel_length_mode='trim' or 'pad'."
+        )
+
+    if channel_length_mode == "trim":
+        target_len = min(lengths)
+        return [ch[:target_len] for ch in channels]
+
+    target_len = max(lengths)
+    padded = []
+    for ch in channels:
+        cur_len = ch.shape[-1]
+        if cur_len < target_len:
+            ch = np.pad(ch, (0, target_len - cur_len), mode="constant")
+        padded.append(ch)
+    return padded
+
+
+def _apply_channel_offsets(
+    channels: List[np.ndarray],
+    channel_offsets: Sequence[Union[int, float]],
+    sample_rate: int,
+    channel_offset_unit: str,
+) -> List[np.ndarray]:
+    """Apply per-channel temporal shifts.
+
+    Positive offset delays a channel (prepends zeros). Negative offset advances
+    a channel (drops leading samples).
+    """
+    _validate_offset_unit(channel_offset_unit)
+    if len(channel_offsets) != len(channels):
+        raise ValueError(
+            "channel_offsets length must match total channel count. "
+            f"Got {len(channel_offsets)} offsets for {len(channels)} channels."
+        )
+
+    shifted = []
+    for idx, (ch, raw_offset) in enumerate(zip(channels, channel_offsets)):
+        if isinstance(raw_offset, bool):
+            raise TypeError("channel_offsets entries must be int/float, not bool.")
+        if channel_offset_unit == "samples":
+            offset_samples = int(raw_offset)
+        else:
+            offset_samples = int(round(float(raw_offset) * sample_rate))
+
+        if offset_samples > 0:
+            ch_shifted = np.pad(ch, (offset_samples, 0), mode="constant")
+        elif offset_samples < 0:
+            trim = -offset_samples
+            ch_shifted = ch[trim:] if trim < ch.shape[-1] else np.zeros((0,), dtype=ch.dtype)
+        else:
+            ch_shifted = ch
+
+        if ch_shifted.ndim != 1:
+            raise ValueError(f"Invalid channel shape after offset on channel {idx}: {ch_shifted.shape}")
+        shifted.append(ch_shifted)
+    return shifted
+
+
+def _load_audio_channels(
+    audio_path: Union[str, Sequence[str]],
+    channel_length_mode: str = "error",
+    channel_offsets: Optional[Sequence[Union[int, float]]] = None,
+    channel_offset_unit: str = "samples",
+) -> Tuple[np.ndarray, int]:
+    """Load audio from a single file or multiple channel files.
+
+    Args:
+        audio_path:
+            - ``str``: one audio file, can be mono or multi-channel.
+            - sequence of ``str``: one or more files. All channels from all files
+              are concatenated on the channel axis.
+        channel_length_mode:
+            Behavior when loaded channel lengths do not match.
+            - ``'error'``: raise ValueError
+            - ``'trim'``: trim all channels to the shortest length
+            - ``'pad'``: zero-pad shorter channels to the longest length
+        channel_offsets:
+            Optional per-channel temporal shifts. Length must match total
+            channel count after loading all files.
+        channel_offset_unit:
+            Unit for ``channel_offsets``: ``'samples'`` or ``'seconds'``.
+
+    Returns:
+        Tuple ``(audio, sample_rate)`` where ``audio`` has shape
+        ``(channels, samples)`` and dtype ``float32``.
+    """
+    import torchaudio
+
+    channel_length_mode = _validate_channel_length_mode(channel_length_mode)
+    channel_offset_unit = _validate_offset_unit(channel_offset_unit)
+
+    if isinstance(audio_path, str):
+        audio_t, sample_rate = torchaudio.load(audio_path)
+        channels = [ch.numpy().astype(np.float32) for ch in audio_t]
+        channels = _match_channel_lengths(channels, channel_length_mode)
+        if channel_offsets is not None:
+            channels = _apply_channel_offsets(
+                channels=channels,
+                channel_offsets=channel_offsets,
+                sample_rate=int(sample_rate),
+                channel_offset_unit=channel_offset_unit,
+            )
+            channels = _match_channel_lengths(channels, channel_length_mode)
+        return np.stack(channels, axis=0), int(sample_rate)
+
+    if not isinstance(audio_path, Sequence) or isinstance(audio_path, (bytes, bytearray)):
+        raise TypeError("audio_path must be str or a sequence of file paths.")
+
+    paths = list(audio_path)
+    if not paths:
+        raise ValueError("audio_path sequence must not be empty.")
+
+    channels: List[np.ndarray] = []
+    sample_rate: Optional[int] = None
+
+    for path in paths:
+        if not isinstance(path, str):
+            raise TypeError("audio_path entries must be file path strings.")
+        wav_t, sr = torchaudio.load(path)
+        wav = wav_t.numpy().astype(np.float32)
+        if sample_rate is None:
+            sample_rate = int(sr)
+        elif int(sr) != sample_rate:
+            raise ValueError(
+                f"All audio files must have the same sample rate. "
+                f"Expected {sample_rate}, got {int(sr)} for '{path}'."
+            )
+        for ch in wav:
+            channels.append(ch)
+
+    assert sample_rate is not None
+
+    channels = _match_channel_lengths(channels, channel_length_mode)
+    if channel_offsets is not None:
+        channels = _apply_channel_offsets(
+            channels=channels,
+            channel_offsets=channel_offsets,
+            sample_rate=sample_rate,
+            channel_offset_unit=channel_offset_unit,
+        )
+        channels = _match_channel_lengths(channels, channel_length_mode)
+
+    audio = np.stack(channels, axis=0).astype(np.float32)
+    return audio, sample_rate
+
+
+def _build_activity_from_diarization(
+    segments: List[Dict[str, Any]],
+    speakers: List[str],
+    num_samples: int,
+    sample_rate: int,
+) -> np.ndarray:
+    """Build sample-domain activity matrix from normalized diarization segments."""
+    if sample_rate <= 0:
+        raise ValueError("sample_rate must be positive.")
+    if num_samples <= 0:
+        raise ValueError("num_samples must be positive.")
+
+    activity = np.zeros((len(speakers), num_samples), dtype=np.float32)
+    speaker_to_idx = {speaker: idx for idx, speaker in enumerate(speakers)}
+
+    for segment in segments:
+        speaker = segment["speaker"]
+        if speaker not in speaker_to_idx:
+            continue
+        start = int(round(float(segment["start"]) * sample_rate))
+        end = int(round(float(segment["end"]) * sample_rate))
+        start = max(0, min(num_samples, start))
+        end = max(0, min(num_samples, end))
+        if end <= start:
+            continue
+        activity[speaker_to_idx[speaker], start:end] = 1.0
+
+    return activity
+
+
 # ---------------------------------------------------------------------------
 # Main class
 # ---------------------------------------------------------------------------
@@ -234,6 +809,10 @@ class GSS:
         Minimum mask value in dB for the multichannel filter (default -200).
     mc_postmask_min_db : float
         Minimum post-mask value in dB (default 0, i.e. no post-masking).
+    garbage_class : bool
+        If True (default), append one extra background/garbage activity class
+        so GSS runs with ``n_speakers + 1`` classes.
+        If False, no extra class is added.
     activity_aggregation : str
         How to aggregate sample-level activity into frame-level activity.
         One of ``'mean'`` (default), ``'max'``, or ``'any'``.
@@ -258,6 +837,7 @@ class GSS:
         mc_ref_channel: str = "max_snr",
         mc_mask_min_db: float = -200,
         mc_postmask_min_db: float = 0,
+        garbage_class: bool = True,
         activity_aggregation: str = "mean",
         use_dtype: torch.dtype = torch.cfloat,
         device: str = "cuda",
@@ -271,6 +851,7 @@ class GSS:
                 "Use one of: 'mean', 'max', 'any'."
             )
         self.activity_aggregation = activity_aggregation
+        self.garbage_class = garbage_class
 
         self.analysis = AudioToSpectrogram(
             fft_length=stft_fft_length, hop_length=stft_hop_length
@@ -467,14 +1048,19 @@ class GSS:
             output is also a ``torch.Tensor`` (useful for training).
         activity : np.ndarray or torch.Tensor, shape (speakers, samples)
             Speaker activity, binary {0, 1} or soft confidences in [0, 1].
+            When ``self.garbage_class=True``, one extra always-active class is
+            appended internally.
 
         Returns
         -------
-        np.ndarray or torch.Tensor, shape (speakers, freq, frames)
+        np.ndarray or torch.Tensor, shape (classes, freq, frames)
             Soft time-frequency masks, values in [0, 1].  Same type as *audio*.
+            ``classes = speakers + 1`` when ``self.garbage_class=True``, else
+            ``classes = speakers``.
         """
         audio_t, is_numpy = _prepare_audio(audio, self.device)
         activity_t = _prepare_activity(activity, self.device)
+        activity_t = _append_garbage_activity_class(activity_t, self.garbage_class)
         ctx = torch.inference_mode() if is_numpy else contextlib.nullcontext()
         with ctx:
             x_enc, _ = self.analysis(input=audio_t)        # (1, ch, freq, frames)
@@ -488,6 +1074,354 @@ class GSS:
         if is_numpy:
             return masks[0].detach().cpu().numpy()
         return masks[0]
+
+    def enhance_segment(
+        self,
+        audio: Union[np.ndarray, torch.Tensor],
+        activity: Union[np.ndarray, torch.Tensor],
+        speaker_id: int,
+        segment_start: Union[int, float],
+        segment_end: Union[int, float],
+        sample_rate: int,
+        context_left_seconds: float = 15.0,
+        context_right_seconds: float = 15.0,
+        segment_unit: str = "seconds",
+        num_chunks: int = 1,
+        mode: str = "standard",
+    ) -> Union[np.ndarray, torch.Tensor]:
+        """Enhance one target segment from long-form audio with context.
+
+        This API is intended for the common long-recording workflow where GSS
+        mask estimation is run on ``[left context] + [target segment] +
+        [right context]``, then only the target segment is returned.
+
+        Parameters
+        ----------
+        audio : np.ndarray or torch.Tensor, shape (channels, samples)
+            Multi-channel long-form waveform.
+        activity : np.ndarray or torch.Tensor, shape (speakers, samples)
+            Speaker activity for the same full recording.
+        speaker_id : int
+            Target speaker index in ``activity``.
+        segment_start, segment_end : int or float
+            Target segment boundaries. Interpreted as seconds when
+            ``segment_unit='seconds'`` and as sample indices when
+            ``segment_unit='samples'``.
+        sample_rate : int
+            Sampling rate used for seconds-to-samples conversion.
+        context_left_seconds, context_right_seconds : float
+            Left/right context duration in seconds (default: 15 s each).
+        segment_unit : str
+            ``'seconds'`` (default) or ``'samples'``.
+        num_chunks : int
+            Number of frequency chunks for memory control.
+        mode : str
+            Enhancement mode:
+            - ``'standard'``: call :meth:`enhance` with ``num_chunks``
+            - ``'oom_fallback'``: call :meth:`enhance_auto` (OOM-aware retry)
+
+            Backward-compatible aliases are accepted:
+            - ``'enhance'`` -> ``'standard'``
+            - ``'auto'`` -> ``'oom_fallback'``
+
+        Returns
+        -------
+        np.ndarray or torch.Tensor
+            Enhanced single-channel waveform for the target segment only.
+        """
+        if sample_rate <= 0:
+            raise ValueError("sample_rate must be positive.")
+        if context_left_seconds < 0 or context_right_seconds < 0:
+            raise ValueError("context_left_seconds and context_right_seconds must be >= 0.")
+        mode = _validate_segment_mode(mode)
+
+        segment_start_samples = _to_sample_index(segment_start, sample_rate, segment_unit)
+        segment_end_samples = _to_sample_index(segment_end, sample_rate, segment_unit)
+        if segment_end_samples <= segment_start_samples:
+            raise ValueError("segment_end must be greater than segment_start.")
+
+        num_samples = audio.shape[-1]
+        if segment_start_samples < 0 or segment_end_samples > num_samples:
+            raise ValueError(
+                f"segment range [{segment_start_samples}, {segment_end_samples}) is outside "
+                f"audio length {num_samples}."
+            )
+
+        left_ctx_samples = int(round(context_left_seconds * sample_rate))
+        right_ctx_samples = int(round(context_right_seconds * sample_rate))
+
+        window_start = max(0, segment_start_samples - left_ctx_samples)
+        window_end = min(num_samples, segment_end_samples + right_ctx_samples)
+
+        left_context = segment_start_samples - window_start
+        right_context = window_end - segment_end_samples
+
+        audio_window = audio[..., window_start:window_end]
+        activity_window = activity[..., window_start:window_end]
+
+        if mode == "oom_fallback":
+            return self.enhance_auto(
+                audio=audio_window,
+                activity=activity_window,
+                speaker_id=speaker_id,
+                left_context=left_context,
+                right_context=right_context,
+            )
+
+        return self.enhance(
+            audio=audio_window,
+            activity=activity_window,
+            speaker_id=speaker_id,
+            left_context=left_context,
+            right_context=right_context,
+            num_chunks=num_chunks,
+        )
+
+    def enhance_from_diarization(
+        self,
+        audio_path: Union[str, Sequence[str]],
+        diarization: Union[str, Sequence[str]],
+        speaker_id: Optional[Union[int, str, Sequence[Union[int, str]]]] = None,
+        diarization_format: Optional[str] = None,
+        diarization_session_id: Optional[str] = None,
+        diarization_time_concat: bool = False,
+        diarization_concat: Optional[bool] = None,
+        diarization_concat_gap_seconds: float = 0.0,
+        diarization_offsets: Optional[Sequence[Union[int, float]]] = None,
+        uem: Optional[str] = None,
+        uem_format: Optional[str] = None,
+        valid_regions: Optional[Union[Sequence[Any], Dict[str, Any]]] = None,
+        channel_length_mode: str = "error",
+        channel_offsets: Optional[Sequence[Union[int, float]]] = None,
+        channel_offset_unit: str = "samples",
+        context_left_seconds: float = 15.0,
+        context_right_seconds: float = 15.0,
+        mode: str = "standard",
+        num_chunks: int = 1,
+    ) -> List[Dict[str, Any]]:
+        """Enhance all diarized target-speaker utterances from a long recording.
+
+        Parameters
+        ----------
+                audio_path : str or sequence of str
+                        Input audio source.
+                        - ``str``: one long-form audio file (mono or multi-channel)
+                        - sequence: multiple files (e.g., separate mono channels)
+                            concatenated along channel axis.
+        diarization : str or sequence of str
+            Path(s) to diarization file(s) readable by ``meeteval.io.load``.
+        speaker_id : int, str, sequence, or None
+            Target speaker selector.
+            - ``int``: index in lexicographically sorted unique speaker labels
+            - ``str``: exact speaker label from diarization
+            - sequence of ``int``/``str``: select multiple speakers
+            - ``None`` (default): process all speakers
+        diarization_format : str, optional
+            Explicit meeteval format hint (e.g. ``'rttm'``).
+        diarization_session_id : str, optional
+            Session/recording ID filter when diarization contains multiple sessions.
+        diarization_time_concat : bool
+            When ``diarization`` is a sequence, concatenate files in order by
+            shifting each subsequent file to the end of the previous one.
+        diarization_concat : bool, optional
+            Deprecated alias of ``diarization_time_concat``.
+        diarization_concat_gap_seconds : float
+            Optional gap inserted between concatenated diarization files.
+        diarization_offsets : sequence of int/float, optional
+            Explicit per-file time offsets (seconds) for diarization files.
+            Use this instead of ``diarization_time_concat`` when exact offsets are
+            already known.
+        uem : str, optional
+            Path to UEM file that defines valid scoring/enhancement regions.
+            Segments outside UEM are excluded, and context is clipped to stay
+            inside UEM boundaries.
+        uem_format : str, optional
+            Explicit meeteval format hint for UEM (e.g. ``'uem'``).
+        valid_regions : sequence or dict, optional
+            Valid time regions given directly as argument.
+            Supported examples:
+            - ``[(start, end), ...]``
+            - ``[{"start": ..., "end": ...}, ...]``
+            - ``{session_id: [(start, end), ...], ...}``
+            Regions are interpreted in seconds and combined with ``uem`` when
+            both are specified (intersection).
+        channel_length_mode : str
+            Length mismatch handling for multi-file ``audio_path``.
+            - ``'error'`` (default): raise error
+            - ``'trim'``: trim all channels to shortest length
+            - ``'pad'``: zero-pad to longest length
+        channel_offsets : sequence of int/float, optional
+            Optional per-channel temporal shift values. Length must equal
+            total channel count after loading ``audio_path``.
+            Positive offset delays a channel, negative offset advances it.
+        channel_offset_unit : str
+            Unit of ``channel_offsets``: ``'samples'`` (default) or
+            ``'seconds'``.
+        context_left_seconds, context_right_seconds : float
+            Left/right context for each segment enhancement.
+        mode : str
+            ``'standard'`` or ``'oom_fallback'``; same meaning as
+            :meth:`enhance_segment`.
+        num_chunks : int
+            Frequency chunk count used when ``mode='standard'``.
+
+        Returns
+        -------
+        list of dict
+            One dict per selected segment (time order) with keys:
+            ``speaker``, ``speaker_id``, ``segment_index``, ``segment_start``,
+            ``segment_end``, ``sample_rate``, ``enhanced_audio``.
+        """
+        if diarization_concat is not None:
+            logger.warning(
+                "diarization_concat is deprecated and will be removed in a future release; "
+                "use diarization_time_concat instead."
+            )
+            diarization_time_concat = bool(diarization_concat)
+
+        segments = _load_diarization_segments(
+            diarization=diarization,
+            diarization_format=diarization_format,
+            session_id=diarization_session_id,
+            time_concat=diarization_time_concat,
+            concat_gap_seconds=diarization_concat_gap_seconds,
+            diarization_offsets=diarization_offsets,
+        )
+
+        allowed_regions = None
+        if uem is not None:
+            allowed_regions = _load_uem_regions(
+                uem=uem,
+                uem_format=uem_format,
+                session_id=diarization_session_id,
+            )
+
+        if valid_regions is not None:
+            direct_regions = _load_valid_regions_arg(
+                valid_regions=valid_regions,
+                session_id=diarization_session_id,
+            )
+            if allowed_regions is None:
+                allowed_regions = direct_regions
+            else:
+                allowed_regions = _intersect_valid_regions(allowed_regions, direct_regions)
+
+        if allowed_regions is not None:
+            filtered_segments = []
+            for segment in segments:
+                if _find_valid_region_for_segment(segment, allowed_regions) is not None:
+                    filtered_segments.append(segment)
+            segments = filtered_segments
+            if not segments:
+                raise ValueError(
+                    "No diarization segments remain after applying valid-region filtering."
+                )
+
+        speakers = sorted({segment["speaker"] for segment in segments})
+        if not speakers:
+            raise ValueError("No speakers found in diarization.")
+
+        if speaker_id is None:
+            selected_indices = list(range(len(speakers)))
+        else:
+            if isinstance(speaker_id, bool):
+                raise TypeError("speaker_id must be int/str/sequence or None, not bool.")
+            if isinstance(speaker_id, (int, str)):
+                selectors = [speaker_id]
+            elif isinstance(speaker_id, Sequence) and not isinstance(speaker_id, (bytes, bytearray)):
+                selectors = list(speaker_id)
+                if not selectors:
+                    raise ValueError("speaker_id sequence must not be empty.")
+            else:
+                raise TypeError("speaker_id must be int, str, sequence of them, or None.")
+
+            selected_indices = []
+            for selector in selectors:
+                if isinstance(selector, bool):
+                    raise TypeError("speaker_id entries must be int or str, not bool.")
+                if isinstance(selector, str):
+                    if selector not in speakers:
+                        raise ValueError(
+                            f"Unknown speaker_id='{selector}'. Available speakers: {speakers}."
+                        )
+                    selected_indices.append(speakers.index(selector))
+                elif isinstance(selector, int):
+                    if selector < 0 or selector >= len(speakers):
+                        raise ValueError(
+                            f"speaker_id={selector} is out of range for {len(speakers)} speakers."
+                        )
+                    selected_indices.append(selector)
+                else:
+                    raise TypeError("speaker_id entries must be int or str.")
+
+            # Deduplicate while preserving order.
+            selected_indices = list(dict.fromkeys(selected_indices))
+
+        selected_speakers = {speakers[idx] for idx in selected_indices}
+        target_segments = [segment for segment in segments if segment["speaker"] in selected_speakers]
+        if not target_segments:
+            raise ValueError("No segments found for selected speaker(s).")
+
+        audio, sample_rate = _load_audio_channels(
+            audio_path=audio_path,
+            channel_length_mode=channel_length_mode,
+            channel_offsets=channel_offsets,
+            channel_offset_unit=channel_offset_unit,
+        )
+        num_samples = audio.shape[-1]
+
+        activity = _build_activity_from_diarization(
+            segments=segments,
+            speakers=speakers,
+            num_samples=num_samples,
+            sample_rate=sample_rate,
+        )
+
+        outputs = []
+        for idx, segment in enumerate(target_segments):
+            target_speaker = segment["speaker"]
+            target_idx = speakers.index(target_speaker)
+
+            left_context_seconds_eff = context_left_seconds
+            right_context_seconds_eff = context_right_seconds
+            if allowed_regions is not None:
+                allowed_region = _find_valid_region_for_segment(segment, allowed_regions)
+                if allowed_region is None:
+                    continue
+                left_context_seconds_eff = min(
+                    context_left_seconds,
+                    max(0.0, segment["start"] - allowed_region["start"]),
+                )
+                right_context_seconds_eff = min(
+                    context_right_seconds,
+                    max(0.0, allowed_region["end"] - segment["end"]),
+                )
+
+            enhanced = self.enhance_segment(
+                audio=audio,
+                activity=activity,
+                speaker_id=target_idx,
+                segment_start=segment["start"],
+                segment_end=segment["end"],
+                sample_rate=sample_rate,
+                context_left_seconds=left_context_seconds_eff,
+                context_right_seconds=right_context_seconds_eff,
+                segment_unit="seconds",
+                num_chunks=num_chunks,
+                mode=mode,
+            )
+            outputs.append(
+                {
+                    "speaker": target_speaker,
+                    "speaker_id": target_idx,
+                    "segment_index": idx,
+                    "segment_start": segment["start"],
+                    "segment_end": segment["end"],
+                    "sample_rate": sample_rate,
+                    "enhanced_audio": enhanced,
+                }
+            )
+        return outputs
 
     # ------------------------------------------------------------------
     # Internal implementation
@@ -522,6 +1456,7 @@ class GSS:
         """
         # Analysis transform → complex spectrogram
         x_enc, _ = self.analysis(input=audio)          # (1, ch, freq, frames)
+        activity = _append_garbage_activity_class(activity, self.garbage_class)
         a_enc = activity_time_to_timefreq(
             activity,
             win_length=self.fft_length,
