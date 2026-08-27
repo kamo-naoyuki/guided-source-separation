@@ -579,6 +579,46 @@ gss-diarize --audio meeting_4ch.wav \
 # Useful for microphone array selection or debugging specific mics
 ```
 
+**Citations for diarization:**
+
+If you use `gss-diarize`, please cite the following works:
+
+For `pyannote.audio`:
+```
+@inproceedings{Plaquet23,
+  author={Alexis Plaquet and Hervé Bredin},
+  title={{Powerset multi-class cross entropy loss for neural speaker diarization}},
+  year=2023,
+  booktitle={Proc. INTERSPEECH 2023},
+}
+```
+
+```
+@inproceedings{Bredin23,
+  author={Hervé Bredin},
+  title={{pyannote.audio 2.1 speaker diarization pipeline: principle, benchmark, and recipe}},
+  year=2023,
+  booktitle={Proc. INTERSPEECH 2023},
+}
+```
+
+For `dover-lap` (multi-channel merging):
+```
+@article{Raj2021Doverlap,
+  title={{DOVER-Lap}: A Method for Combining Overlap-aware Diarization Outputs},
+  author={D.Raj and P.Garcia and Z.Huang and S.Watanabe and D.Povey and A.Stolcke and S.Khudanpur},
+  journal={2021 IEEE Spoken Language Technology Workshop (SLT)},
+  year={2021}
+}
+
+@article{Raj2021ReformulatingDL,
+  title={Reformulating {DOVER-Lap} Label Mapping as a Graph Partitioning Problem},
+  author={Desh Raj and S. Khudanpur},
+  journal={INTERSPEECH},
+  year={2021},
+}
+```
+
 ## Iterative denoising workflow
 
 For higher-quality speaker separation, combine denoising-only mode with diarization and re-processing:
@@ -783,57 +823,6 @@ Run the tests:
 ```bash
 pip install -e .
 python -m pytest tests/ -v
-```
-
-## Command-Line Usage
-
-After installation, use the `gss-enhance-diarization` command:
-
-Single speaker enhancement:
-
-```bash
-gss-enhance-diarization meeting.wav meeting.rttm \
-  --speaker-id 0 \
-  --output-dir ./enhanced
-```
-
-All speakers:
-
-```bash
-gss-enhance-diarization meeting.wav meeting.rttm \
-  --output-dir ./enhanced
-```
-
-Multi-diarization file input (merged by default):
-
-```bash
-gss-enhance-diarization meeting.wav \
-  spkA.rttm spkB.rttm \
-  --output-dir ./enhanced
-```
-
-Multi-diarization with time concatenation:
-
-```bash
-gss-enhance-diarization meeting.wav \
-  part1.rttm part2.rttm \
-  --diarization-time-concat \
-  --output-dir ./enhanced
-```
-
-Multi-channel input (separate files):
-
-```bash
-gss-enhance-diarization ch0.wav ch1.wav ch2.wav \
-  meeting.rttm \
-  --channel-length-mode trim \
-  --output-dir ./enhanced
-```
-
-For all available options:
-
-```bash
-gss-enhance-diarization --help
 ```
 
 Run the example:

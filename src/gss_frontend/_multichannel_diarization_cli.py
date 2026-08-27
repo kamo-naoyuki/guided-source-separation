@@ -123,11 +123,59 @@ Examples:
         "Use --audio to specify RTTM files to merge.",
     )
 
+    parser.add_argument(
+        "--output-format",
+        choices=["rttm", "seglst"],
+        default="rttm",
+        help="Output format: 'rttm' (default) or 'seglst' (meeteval format).",
+    )
+
+    parser.add_argument(
+        "--uem",
+        default=None,
+        help="UEM (Universal English Mask) file: speech segments to consider during merging. "
+        "RTTM format file specifying speech activity regions.",
+    )
+
+    parser.add_argument(
+        "--label-mapping",
+        choices=["hungarian", "greedy"],
+        default="hungarian",
+        help="Label mapping algorithm for merging: 'hungarian' (optimal, slower) or 'greedy' (faster, default: hungarian).",
+    )
+
+    parser.add_argument(
+        "--random-seed",
+        type=int,
+        default=None,
+        help="Random seed for reproducibility (sets numpy, torch, and python random seeds).",
+    )
+
     args = parser.parse_args()
+
+    # Set random seed if specified
+    if args.random_seed is not None:
+        import random
+        logger.info(f"Setting random seed to {args.random_seed}")
+        random.seed(args.random_seed)
+        np.random.seed(args.random_seed)
+        torch.manual_seed(args.random_seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed(args.random_seed)
+            torch.cuda.manual_seed_all(args.random_seed)
+
+    # Auto-detect output format from file extension
+    output_ext = Path(args.output).suffix.lower()
+    if output_ext == ".seglst":
+        output_format = "seglst"
+    elif output_ext == ".rttm":
+        output_format = "rttm"
+    else:
+        output_format = args.output_format  # Use specified format or default
 
     # Handle merge-only mode
     if args.merge_only:
-        # Merge-only: use --audio to specify RTTM files
+        # Merge-only: use --audio to specify RTTM or JSON files
         try:
             from dover_lap import DiariaziationComparator
         except ImportError:
@@ -136,33 +184,72 @@ Examples:
             )
             sys.exit(1)
 
-        rttm_files = args.audio
-        logger.info(f"Merging {len(rttm_files)} RTTM files...")
+        input_files = args.audio
+        logger.info(f"Merging {len(input_files)} files...")
 
-        # Read RTTM files
+        # Load diarization data from files (supports JSON and RTTM formats)
+        try:
+            from meeteval.io import load
+        except ImportError:
+            logger.error(
+                "meeteval is required for JSON/RTTM loading. Install it with: pip install meeteval"
+            )
+            sys.exit(1)
+
         rttm_strings = []
-        for rttm_file in rttm_files:
-            with open(rttm_file, "r") as f:
-                rttm_content = f.read()
-                rttm_strings.append(rttm_content)
-                logger.debug(f"Loaded RTTM from {rttm_file}")
+        for input_file in input_files:
+            file_ext = Path(input_file).suffix.lower()
+            
+            logger.info(f"Loading {file_ext} file: {input_file}")
+            
+            try:
+                # Use meeteval to load JSON or RTTM
+                diarization_data = load(input_file)
+                # Convert to RTTM string
+                rttm_str = str(diarization_data)
+                rttm_strings.append(rttm_str)
+                logger.debug(f"Loaded {len(list(diarization_data.itertracks()))} speaker turns from {input_file}")
+            except Exception as e:
+                logger.error(f"Failed to load {input_file}: {e}")
+                sys.exit(1)
+
+        # Load UEM if specified
+        uem_data = None
+        if args.uem:
+            logger.info(f"Loading UEM file: {args.uem}")
+            try:
+                uem_data = load(args.uem)
+            except Exception as e:
+                logger.error(f"Failed to load UEM file {args.uem}: {e}")
+                sys.exit(1)
 
         # Merge using dover-lap
         comparator = DiariaziationComparator()
 
+        # Set algorithm based on --label-mapping
+        algorithm = args.label_mapping
+
         if args.threshold is not None:
             logger.info(f"Using fixed threshold {args.threshold}")
-            merged = comparator.merge(rttm_strings, threshold=args.threshold)
+            merged = comparator.merge(
+                rttm_strings, 
+                threshold=args.threshold,
+                uem=uem_data,
+                algorithm=algorithm
+            )
         else:
-            logger.info("Finding optimal threshold...")
-            merged = comparator.optimal_threshold(rttm_strings)
+            logger.info(f"Finding optimal threshold using {algorithm} algorithm...")
+            merged = comparator.optimal_threshold(
+                rttm_strings,
+                uem=uem_data,
+                algorithm=algorithm
+            )
 
         # Save result
         output_file = Path(args.output)
         output_file.parent.mkdir(parents=True, exist_ok=True)
 
-        with open(output_file, "w") as f:
-            merged.write_rttm(f)
+        _save_diarization(merged, output_file, output_format)
 
         # Log merged stats
         num_speakers = len(set(label for _, _, label in merged.itertracks(yield_label=True)))
@@ -181,6 +268,17 @@ Examples:
     
     pipeline = Pipeline.from_pretrained(args.model, use_auth_token=args.hf_token)
     pipeline.to(torch.device(args.device))
+
+    # Load UEM if specified
+    uem_data = None
+    if args.uem:
+        logger.info(f"Loading UEM file: {args.uem}")
+        try:
+            from meeteval.io import load
+            uem_data = load(args.uem)
+        except Exception as e:
+            logger.error(f"Failed to load UEM file {args.uem}: {e}")
+            sys.exit(1)
 
     # Prepare channel audio files
     channel_files = []
@@ -226,7 +324,8 @@ Examples:
 
                 # Process channels and merge
                 _process_and_merge_channels(
-                    channel_files, pipeline, args.threshold, args.output
+                    channel_files, pipeline, args.threshold, args.output, output_format,
+                    uem=uem_data, args=args
                 )
     else:
         # Multiple channel files
@@ -235,7 +334,8 @@ Examples:
         channel_files = args.audio
         logger.info(f"Processing {len(channel_files)} channel files...")
         _process_and_merge_channels(
-            channel_files, pipeline, args.threshold, args.output
+            channel_files, pipeline, args.threshold, args.output, output_format,
+            uem=uem_data, args=args
         )
 
     logger.info(f"Merged diarization saved to {args.output}")
@@ -246,8 +346,21 @@ def _process_and_merge_channels(
     pipeline,
     threshold: Optional[float],
     output_path: str,
+    output_format: str = "rttm",
+    uem=None,
+    args=None,
 ) -> None:
-    """Process each channel and merge results."""
+    """Process each channel and merge results.
+    
+    Args:
+        channel_files: List of channel audio files.
+        pipeline: pyannote diarization pipeline.
+        threshold: Optional fixed threshold for merging.
+        output_path: Path to save output file.
+        output_format: Output format: 'rttm' or 'seglst'.
+        uem: Optional UEM (Universal English Mask) data for diarization.
+        args: Parsed command-line arguments (for label_mapping, etc.).
+    """
     from dover_lap import DiariaziationComparator
 
     diarizations = []
@@ -255,7 +368,11 @@ def _process_and_merge_channels(
 
     for ch_idx, ch_file in enumerate(channel_files):
         logger.info(f"[Ch{ch_idx}] Running diarization on {ch_file}...")
-        diarization = pipeline(ch_file)
+        # Pass UEM to pipeline if available
+        if uem is not None:
+            diarization = pipeline(ch_file, uem=uem)
+        else:
+            diarization = pipeline(ch_file)
         diarizations.append(diarization)
 
         # Convert to RTTM string for merging
@@ -270,21 +387,28 @@ def _process_and_merge_channels(
     logger.info("Merging diarizations using dover-lap...")
     comparator = DiariaziationComparator()
 
+    # Prepare merge parameters
+    merge_kwargs = {}
+    if uem is not None:
+        merge_kwargs["uem"] = uem
+    if args and hasattr(args, "label_mapping"):
+        merge_kwargs["algorithm"] = args.label_mapping
+
     if threshold is not None:
         # Use fixed threshold
         logger.info(f"Using fixed threshold {threshold}")
-        merged = comparator.merge(rttm_strings, threshold=threshold)
+        merged = comparator.merge(rttm_strings, threshold=threshold, **merge_kwargs)
     else:
         # Find optimal threshold
-        logger.info("Finding optimal threshold...")
-        merged = comparator.optimal_threshold(rttm_strings)
+        algorithm_str = args.label_mapping if args and hasattr(args, "label_mapping") else "hungarian"
+        logger.info(f"Finding optimal threshold using {algorithm_str} algorithm...")
+        merged = comparator.optimal_threshold(rttm_strings, **merge_kwargs)
 
     # Save result
     output_file = Path(output_path)
     output_file.parent.mkdir(parents=True, exist_ok=True)
 
-    with open(output_file, "w") as f:
-        merged.write_rttm(f)
+    _save_diarization(merged, output_file, output_format)
 
     # Log merged stats
     num_speakers = len(set(label for _, _, label in merged.itertracks(yield_label=True)))
@@ -292,6 +416,45 @@ def _process_and_merge_channels(
     logger.info(
         f"Merged result: {num_speakers} speakers, {num_turns} turns"
     )
+
+
+def _save_diarization(diarization, output_file: Path, output_format: str) -> None:
+    """Save diarization result in the specified format.
+    
+    Args:
+        diarization: Diarization object.
+        output_file: Path to save the output file.
+        output_format: Output format: 'rttm' or 'seglst'.
+    """
+    if output_format.lower() == "seglst":
+        # Convert RTTM to SegLST format using meeteval
+        try:
+            from meeteval.io import load_rttm, write_seglst
+        except ImportError:
+            logger.error(
+                "meeteval is required for SegLST format. Install it with: pip install meeteval"
+            )
+            sys.exit(1)
+        
+        # Write RTTM to temporary file, then convert to SegLST
+        import tempfile as tmp_module
+        with tmp_module.NamedTemporaryFile(mode='w', suffix='.rttm', delete=False) as tmp_rttm:
+            tmp_rttm_path = tmp_rttm.name
+            diarization.write_rttm(tmp_rttm)
+        
+        try:
+            # Load RTTM and write as SegLST
+            rttm_data = load_rttm(tmp_rttm_path)
+            write_seglst(rttm_data, str(output_file))
+            logger.info(f"Saved output in SegLST format: {output_file}")
+        finally:
+            # Clean up temporary file
+            Path(tmp_rttm_path).unlink(missing_ok=True)
+    else:
+        # Default: RTTM format
+        with open(output_file, "w") as f:
+            diarization.write_rttm(f)
+        logger.info(f"Saved output in RTTM format: {output_file}")
 
 
 if __name__ == "__main__":
