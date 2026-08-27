@@ -1440,3 +1440,95 @@ class TestBackprop:
         out.abs().mean().backward()
         assert activity.grad is None or torch.all(activity.grad == 0)
 
+
+# ---------------------------------------------------------------------------
+# Distributed Processing / Group Partitioning
+# ---------------------------------------------------------------------------
+
+class TestDistributedProcessing:
+    """Test group partitioning for distributed processing (SLURM, etc.)."""
+
+    def test_partition_single_group(self):
+        """Single group (no partitioning) returns all segments."""
+        segments = [
+            {"start": 0.0, "end": 5.0, "speaker": "spkA"},
+            {"start": 5.0, "end": 10.0, "speaker": "spkB"},
+            {"start": 10.0, "end": 15.0, "speaker": "spkA"},
+        ]
+        groups = frontend_module._partition_segments_by_duration(segments, num_groups=1)
+        assert len(groups) == 1
+        assert sorted(groups[0]) == [0, 1, 2]
+
+    def test_partition_balanced_groups(self):
+        """Multiple groups should have balanced total duration."""
+        segments = [
+            {"start": 0.0, "end": 10.0, "speaker": "spkA"},    # 10s
+            {"start": 10.0, "end": 15.0, "speaker": "spkB"},   # 5s
+            {"start": 15.0, "end": 25.0, "speaker": "spkA"},   # 10s
+            {"start": 25.0, "end": 30.0, "speaker": "spkB"},   # 5s
+        ]
+        groups = frontend_module._partition_segments_by_duration(segments, num_groups=2)
+        
+        # Each group should have total duration ~15s
+        durations = []
+        for group in groups:
+            total_dur = sum(segments[i]["end"] - segments[i]["start"] for i in group)
+            durations.append(total_dur)
+        
+        assert len(groups) == 2
+        assert sum(durations) == 30.0  # Total duration preserved
+        # Check balance: difference should be small
+        assert abs(durations[0] - durations[1]) <= 10.0  # Allow some imbalance
+
+    def test_partition_empty_segments(self):
+        """Partitioning empty segment list should return empty groups."""
+        groups = frontend_module._partition_segments_by_duration([], num_groups=3)
+        assert len(groups) == 3
+        assert all(len(g) == 0 for g in groups)
+
+    def test_compute_group_statistics(self):
+        """Statistics computation should work correctly."""
+        segments = [
+            {"start": 0.0, "end": 5.0},
+            {"start": 5.0, "end": 12.0},
+            {"start": 12.0, "end": 17.0},
+        ]
+        stats = frontend_module._compute_group_statistics(segments, [0, 1, 2])
+        
+        assert stats["num_segments"] == 3
+        assert stats["total_duration_seconds"] == 17.0
+        assert stats["avg_duration_seconds"] == pytest.approx(17.0 / 3)
+
+    def test_compute_group_statistics_partial(self):
+        """Statistics for a subset of segments."""
+        segments = [
+            {"start": 0.0, "end": 5.0},
+            {"start": 5.0, "end": 12.0},
+            {"start": 12.0, "end": 17.0},
+        ]
+        stats = frontend_module._compute_group_statistics(segments, [0, 2])
+        
+        assert stats["num_segments"] == 2
+        assert stats["total_duration_seconds"] == 10.0  # 5 + 5
+        assert stats["avg_duration_seconds"] == pytest.approx(5.0)
+
+    def test_compute_group_statistics_empty(self):
+        """Statistics for empty group."""
+        segments = [
+            {"start": 0.0, "end": 5.0},
+        ]
+        stats = frontend_module._compute_group_statistics(segments, [])
+        
+        assert stats["num_segments"] == 0
+        assert stats["total_duration_seconds"] == 0.0
+        assert stats["avg_duration_seconds"] == 0.0
+
+    def test_partition_invalid_num_groups(self):
+        """Invalid num_groups should raise error."""
+        segments = [{"start": 0.0, "end": 5.0}]
+        with pytest.raises(ValueError):
+            frontend_module._partition_segments_by_duration(segments, num_groups=0)
+        with pytest.raises(ValueError):
+            frontend_module._partition_segments_by_duration(segments, num_groups=-1)
+
+

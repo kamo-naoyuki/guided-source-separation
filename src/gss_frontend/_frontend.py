@@ -248,6 +248,103 @@ def _import_meeteval_io():
     return meeteval_io
 
 
+def _partition_segments_by_duration(
+    segments: List[Dict[str, Any]],
+    num_groups: int = 1,
+) -> List[List[int]]:
+    """Partition segment indices into groups with balanced total duration.
+
+    Uses a greedy algorithm: repeatedly assign the next segment (in descending
+    duration order) to the group with the smallest total duration.
+
+    Args:
+        segments: List of dicts with at least "start" and "end" keys.
+        num_groups: Number of groups to partition into (default 1 = no partitioning).
+
+    Returns:
+        List of num_groups lists, each containing segment indices for that group.
+        Each segment appears exactly once, in no particular order within its group.
+    """
+    import heapq
+
+    if num_groups < 1:
+        raise ValueError(f"num_groups must be >= 1, got {num_groups}")
+    if not segments:
+        return [[] for _ in range(num_groups)]
+    if num_groups == 1:
+        return [list(range(len(segments)))]
+
+    # Compute duration for each segment
+    durations = [
+        seg["end"] - seg["start"]
+        for seg in segments
+    ]
+
+    # Sort segment indices by descending duration
+    sorted_indices = sorted(
+        range(len(segments)),
+        key=lambda i: durations[i],
+        reverse=True,
+    )
+
+    # Initialize groups with (total_duration, group_id, [segment_indices])
+    # Use heap to efficiently find the group with smallest duration
+    groups = [
+        (0.0, gid, [])
+        for gid in range(num_groups)
+    ]
+    heapq.heapify(groups)
+
+    # Greedily assign each segment to the group with smallest total duration
+    for seg_idx in sorted_indices:
+        total_dur, gid, seg_list = heapq.heappop(groups)
+        seg_list.append(seg_idx)
+        heapq.heappush(
+            groups,
+            (total_dur + durations[seg_idx], gid, seg_list),
+        )
+
+    # Extract result in group order
+    result = [None] * num_groups
+    for _, gid, seg_list in groups:
+        result[gid] = seg_list
+
+    return result
+
+
+def _compute_group_statistics(
+    segments: List[Dict[str, Any]],
+    group_indices: List[int],
+) -> Dict[str, Any]:
+    """Compute statistics for a group of segments.
+
+    Args:
+        segments: List of all segments.
+        group_indices: Indices of segments in this group.
+
+    Returns:
+        Dict with keys: "num_segments", "total_duration_seconds", "avg_duration_seconds".
+    """
+    if not group_indices:
+        return {
+            "num_segments": 0,
+            "total_duration_seconds": 0.0,
+            "avg_duration_seconds": 0.0,
+        }
+
+    total_duration = sum(
+        segments[i]["end"] - segments[i]["start"]
+        for i in group_indices
+    )
+    avg_duration = total_duration / len(group_indices)
+
+    return {
+        "num_segments": len(group_indices),
+        "total_duration_seconds": total_duration,
+        "avg_duration_seconds": avg_duration,
+    }
+
+
 def _segment_to_dict(segment: Any, default_session: Optional[str] = None) -> Dict[str, Any]:
     """Normalize one diarization segment object to a dict.
 
@@ -787,6 +884,8 @@ class GSS:
         FFT length for STFT analysis/synthesis (default 1024).
     stft_hop_length : int
         Hop length for STFT (default 256).
+    enable_dereverb : bool
+        If True (default), apply WPE dereverberation. If False, skip dereverberation.
     dereverb_prediction_delay : int
         WPE prediction delay (default 2).
     dereverb_filter_length : int
@@ -803,8 +902,11 @@ class GSS:
         Rank of the multichannel filter, ``'one'`` or ``'full'`` (default ``'one'``).
     mc_filter_postfilter : str
         Post-filter, e.g. ``'ban'`` (default).
-    mc_ref_channel : str or int
-        Reference channel selection strategy (default ``'max_snr'``).
+    mc_ref_channel : str, int, or None
+        Reference channel selection strategy.
+        - ``'max_snr'`` (default): Auto-select best channel by SNR.
+        - ``int``: Use fixed channel index (0-based).
+        - ``None``: No channel selection (output all channels, MIMO mode).
     mc_mask_min_db : float
         Minimum mask value in dB for the multichannel filter (default -200).
     mc_postmask_min_db : float
@@ -826,6 +928,7 @@ class GSS:
         self,
         stft_fft_length: int = 1024,
         stft_hop_length: int = 256,
+        enable_dereverb: bool = True,
         dereverb_prediction_delay: int = 2,
         dereverb_filter_length: int = 10,
         dereverb_num_iterations: int = 3,
@@ -845,6 +948,7 @@ class GSS:
         self.fft_length = stft_fft_length
         self.hop_length = stft_hop_length
         self.device = torch.device(device)
+        self.enable_dereverb = enable_dereverb
         if activity_aggregation not in ("mean", "max", "any"):
             raise ValueError(
                 f"activity_aggregation='{activity_aggregation}' is not supported. "
@@ -859,12 +963,15 @@ class GSS:
         self.synthesis = SpectrogramToAudio(
             fft_length=stft_fft_length, hop_length=stft_hop_length
         ).to(self.device)
-        self.dereverb = MaskBasedDereverbWPE(
-            filter_length=dereverb_filter_length,
-            prediction_delay=dereverb_prediction_delay,
-            num_iterations=dereverb_num_iterations,
-            dtype=use_dtype,
-        ).to(self.device)
+        if enable_dereverb:
+            self.dereverb = MaskBasedDereverbWPE(
+                filter_length=dereverb_filter_length,
+                prediction_delay=dereverb_prediction_delay,
+                num_iterations=dereverb_num_iterations,
+                dtype=use_dtype,
+            ).to(self.device)
+        else:
+            self.dereverb = None
         self.gss = MaskEstimatorGSS(
             num_iterations=bss_iterations, dtype=use_dtype
         ).to(self.device)
@@ -918,8 +1025,11 @@ class GSS:
 
         Returns
         -------
-        np.ndarray or torch.Tensor, shape (samples_out,)
-            Single-channel enhanced waveform, float32.  Same type as *audio*.
+        np.ndarray or torch.Tensor
+            Enhanced waveform, float32. Shape depends on beamformer mode:
+            - Single-channel (default, when mc_ref_channel='max_snr' or int): shape (samples_out,)
+            - Multi-channel MIMO (when mc_ref_channel=None): shape (num_channels, samples_out)
+            Same type as *audio*.
             ``samples_out = len(audio[0]) - left_context - right_context``.
         """
         audio_t, is_numpy = _prepare_audio(audio, self.device)
@@ -944,9 +1054,16 @@ class GSS:
             )
 
         # Drop context from time domain
-        result = result[left_context:]
-        if right_context > 0:
-            result = result[:-right_context]
+        if result.dim() == 1:
+            # Single-channel mode: (samples,)
+            result = result[left_context:]
+            if right_context > 0:
+                result = result[:-right_context]
+        else:
+            # MIMO mode: (num_channels, samples)
+            result = result[:, left_context:]
+            if right_context > 0:
+                result = result[:, :-right_context]
         if is_numpy:
             return result.detach().cpu().numpy()
         return result
@@ -1198,6 +1315,8 @@ class GSS:
         context_right_seconds: float = 15.0,
         mode: str = "standard",
         num_chunks: int = 1,
+        num_groups: int = 1,
+        group_id: int = 0,
     ) -> List[Dict[str, Any]]:
         """Enhance all diarized target-speaker utterances from a long recording.
 
@@ -1264,6 +1383,13 @@ class GSS:
             :meth:`enhance_segment`.
         num_chunks : int
             Frequency chunk count used when ``mode='standard'``.
+        num_groups : int
+            Number of groups to partition segments into for distributed processing.
+            (default: 1 = no partitioning)
+        group_id : int
+            Zero-based group index to process when using partitioning.
+            Must be 0 <= group_id < num_groups. (default: 0)
+            Segments are partitioned with balanced total duration across groups.
 
         Returns
         -------
@@ -1362,6 +1488,45 @@ class GSS:
         if not target_segments:
             raise ValueError("No segments found for selected speaker(s).")
 
+        # Partition segments for distributed processing
+        if num_groups < 1:
+            raise ValueError(f"num_groups must be >= 1, got {num_groups}")
+        if group_id < 0 or group_id >= num_groups:
+            raise ValueError(
+                f"group_id must be in range [0, {num_groups}), got {group_id}"
+            )
+
+        # Log total statistics
+        total_stats = _compute_group_statistics(target_segments, list(range(len(target_segments))))
+        logger.info(
+            "Total segments: %d, total duration: %.1f seconds (avg: %.1f s/seg)",
+            total_stats["num_segments"],
+            total_stats["total_duration_seconds"],
+            total_stats["avg_duration_seconds"],
+        )
+
+        # Apply group partitioning if needed
+        group_segment_indices = None  # Track global segment indices for consistent file naming
+        if num_groups > 1:
+            all_groups = _partition_segments_by_duration(target_segments, num_groups)
+            group_segment_indices = all_groups[group_id]
+            target_segments = [target_segments[i] for i in group_segment_indices]
+            group_stats = _compute_group_statistics(target_segments, list(range(len(target_segments))))
+            logger.info(
+                "Processing group %d/%d: %d segments, %.1f seconds (avg: %.1f s/seg)",
+                group_id + 1,
+                num_groups,
+                group_stats["num_segments"],
+                group_stats["total_duration_seconds"],
+                group_stats["avg_duration_seconds"],
+            )
+        else:
+            # When not partitioning, use sequential indices
+            group_segment_indices = list(range(len(target_segments)))
+        
+        if not target_segments:
+            raise ValueError("No segments in the requested group.")
+
         audio, sample_rate = _load_audio_channels(
             audio_path=audio_path,
             channel_length_mode=channel_length_mode,
@@ -1414,7 +1579,7 @@ class GSS:
                 {
                     "speaker": target_speaker,
                     "speaker_id": target_idx,
-                    "segment_index": idx,
+                    "segment_index": group_segment_indices[idx],  # Use global index for consistent naming
                     "segment_start": segment["start"],
                     "segment_end": segment["end"],
                     "sample_rate": sample_rate,
@@ -1475,11 +1640,12 @@ class GSS:
 
             x_enc_n = x_enc[..., n_start:n_end, :]
 
-            # WPE dereverberation
-            if cpu_fallback:
-                x_enc_n, _ = _try_gpu_else_cpu(self.dereverb, input=x_enc_n)
-            else:
-                x_enc_n, _ = self.dereverb(input=x_enc_n)
+            # WPE dereverberation (optional)
+            if self.enable_dereverb:
+                if cpu_fallback:
+                    x_enc_n, _ = _try_gpu_else_cpu(self.dereverb, input=x_enc_n)
+                else:
+                    x_enc_n, _ = self.dereverb(input=x_enc_n)
             x_enc[..., n_start:n_end, :] = x_enc_n
 
             # GSS mask estimation
@@ -1524,6 +1690,10 @@ class GSS:
         target_enc = torch.concatenate(target_chunks, dim=-2)
 
         # Synthesis transform → waveform
-        target, _ = self.synthesis(input=target_enc)   # (1, 1, samples)
+        target, _ = self.synthesis(input=target_enc)   # (1, num_channels, samples)
 
-        return target[0, 0]
+        # Return single channel or all channels depending on ref_channel setting
+        if self.mc.filter.is_mimo:
+            return target[0, :, :]  # (num_channels, samples) for MIMO mode
+        else:
+            return target[0, 0, :]  # (samples,) for single-channel mode

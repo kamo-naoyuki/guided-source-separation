@@ -51,11 +51,12 @@ meeteval
 ```bash
 pip install -e .
 
-# Optional: diarization loader support via meeteval
-pip install -e .[diarization]
+# For diarization support (pyannote + dover-lap)
+pip install -e ".[diarization]"
 ```
 
 ## Usage
+
 
 ```python
 import numpy as np
@@ -150,6 +151,9 @@ segments = frontend.enhance_from_diarization(
     context_left_seconds=15.0,
     context_right_seconds=15.0,
     mode="standard",             # or "oom_fallback"
+    # For distributed processing: partition into 4 groups, process group 0
+    # num_groups=4,
+    # group_id=0,                  # This job processes segments in group 0
 )
 
 for item in segments:
@@ -161,6 +165,452 @@ for item in segments:
         item["enhanced_audio"].shape,
     )
 ```
+
+### Command-line usage
+
+The `gss-enhance` CLI tool processes audio files with diarization directly from the shell.
+Use `--audio` for audio file(s) and `--diarization` for diarization file(s):
+
+```bash
+gss-enhance --audio meeting.wav --diarization meeting.rttm --output-dir ./enhanced
+
+# Process with explicit speaker ID
+gss-enhance --audio meeting.wav --diarization meeting.rttm --speaker-id 0 --output-dir ./enhanced
+
+# Multiple speakers
+gss-enhance --audio meeting.wav --diarization meeting.rttm --speaker-id spkA spkB --output-dir ./enhanced
+
+# Denoising-only mode (remove background noise, keep all speakers)
+gss-enhance --audio meeting.wav --diarization meeting.rttm --denoising-only --output-dir ./enhanced
+
+# Multi-file audio and diarization (merged by default)
+gss-enhance --audio ch0.wav ch1.wav \
+  --diarization meeting_part1.rttm meeting_part2.rttm \
+  --channel-length-mode trim \
+  --output-dir ./enhanced
+
+# Output in different audio formats (WAV, FLAC, OGG)
+gss-enhance --audio meeting.wav --diarization meeting.rttm \
+  --output-format wav \
+  --output-dir ./enhanced_wav
+
+gss-enhance --audio meeting.wav --diarization meeting.rttm \
+  --output-format flac \
+  --output-dir ./enhanced_flac
+
+gss-enhance --audio meeting.wav --diarization meeting.rttm \
+  --output-format ogg \
+  --output-dir ./enhanced_ogg
+
+# With UEM and custom context
+gss-enhance --audio meeting.wav --diarization meeting.rttm \
+  --uem meeting.uem \
+  --context-left 10.0 \
+  --context-right 10.0 \
+  --output-dir ./enhanced
+
+# Use GPU with custom STFT settings
+gss-enhance --audio meeting.wav --diarization meeting.rttm \
+  --device cuda \
+  --stft-fft-length 1024 \
+  --stft-hop-length 256 \
+  --bss-iterations 20 \
+  --output-dir ./enhanced
+
+# Skip WPE dereverberation (faster, no dereverberation processing)
+gss-enhance --audio meeting.wav --diarization meeting.rttm \
+  --disable-dereverb \
+  --output-dir ./enhanced_no_dereverb
+
+# Denoising-only mode
+# Remove background noise while keeping all speakers unchanged
+# Useful for meeting preprocessing when speaker separation is not needed
+gss-enhance --audio meeting.wav --diarization meeting.rttm \
+  --denoising-only \
+  --output-dir ./enhanced_denoised
+
+# Input channel selection (for single multi-channel file)
+# Process only specific channels from a multi-channel audio file
+gss-enhance --audio meeting_4ch.wav --diarization meeting.rttm \
+  --channels 0 2 \
+  --output-dir ./enhanced
+
+# Useful for microphone array selection or processing specific mics
+
+# Beamformer reference channel selection (default: max_snr)
+# By default, GSS automatically selects the channel with the highest output SNR
+# (signal-to-noise ratio) after beamforming. Use --mc-ref-channel to override:
+
+# Output all channels from beamformer (MIMO mode, no channel selection)
+gss-enhance --audio meeting.wav --diarization meeting.rttm \
+  --mc-ref-channel none \
+  --output-dir ./enhanced_mimo
+
+# Use specific channel (e.g., channel 0) instead of auto-selection
+gss-enhance --audio meeting.wav --diarization meeting.rttm \
+  --mc-ref-channel 0 \
+  --output-dir ./enhanced_ch0
+
+# Distributed processing (SLURM/Condor): partition into 4 groups, process group 0
+gss-enhance --audio meeting.wav --diarization meeting.rttm \
+  --num-groups 4 --group-id 0 \
+  --output-dir ./enhanced/group0
+# Run in parallel on 4 nodes/jobs with --group-id 1, 2, 3
+```
+
+#### Parallel processing with SLURM
+
+Create a SLURM array job script `run_gss_slurm.sh`:
+
+```bash
+#!/bin/bash
+#SBATCH --job-name=gss-enhance
+#SBATCH --array=0-3                    # 4 parallel jobs (groups 0-3)
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=4
+#SBATCH --gpus-per-task=1              # 1 GPU per job
+#SBATCH --time=02:00:00
+#SBATCH --output=logs/gss_%a.log
+
+# Number of parallel groups
+NUM_GROUPS=4
+GROUP_ID=$SLURM_ARRAY_TASK_ID
+
+# Run gss-enhance for this group
+gss-enhance \
+  --audio meeting.wav \
+  --diarization meeting.rttm \
+  --num-groups $NUM_GROUPS \
+  --group-id $GROUP_ID \
+  --device cuda \
+  --output-dir ./enhanced/group_${GROUP_ID}
+
+echo "Group $GROUP_ID completed at $(date)"
+```
+
+Submit and run:
+
+```bash
+mkdir -p logs
+sbatch run_gss_slurm.sh
+
+# Check status
+squeue -u $USER
+
+# After completion, merge results from all groups
+ls -la enhanced/group_*/
+```
+
+Output files from all groups will be named consistently (e.g., `000_spkA_10.50_15.75.wav`, 
+`001_spkB_20.00_28.30.wav`, etc.), making them easy to combine or process further.
+
+See `gss-enhance --help` for all options.
+
+### Denoising-only mode
+
+By default, `gss-enhance` processes each speaker individually, isolating their speech from
+noise and other speakers. For meeting preprocessing, you may want to keep all speakers while
+removing only background noise. Use `--denoising-only`:
+
+```bash
+gss-enhance --audio meeting.wav --diarization meeting.rttm \
+  --denoising-only \
+  --output-dir ./enhanced_denoised
+```
+
+This mode:
+- Extracts all speaker activity regions from diarization
+- Merges overlapping speaker regions into continuous denoising intervals
+- Removes background noise outside of speaker regions
+- Outputs one denoised segment per merged interval (combining all speakers)
+- Ignores `--speaker-id` if provided
+- Can be combined with distributed processing (`--num-groups`)
+
+Output segments will be labeled `denoised` instead of speaker names.
+
+### Embedding enhanced segments back into original audio
+
+By default, `gss-enhance` outputs individual enhanced segments per speaker. To embed these
+segments back into the original audio (with enhanced speech regions replacing originals),
+use the `gss-embed` tool:
+
+```bash
+# Step 1: Generate enhanced segments + metadata (MIMO mode: all channels needed for embedding)
+gss-enhance --audio meeting.wav --diarization meeting.rttm \
+  --mc-ref-channel none \
+  --output-seglst segments \
+  --output-dir ./enhanced
+
+# Step 2: Embed enhanced segments back into original audio
+gss-embed --segments enhanced/segments.json \
+  --audio meeting.wav \
+  --output-dir ./embedded
+
+# Output: embedded/spk0.wav, embedded/spk1.wav, etc.
+```
+
+**Output filename scheme:**
+
+gss-embed generates output filenames based on speaker labels from the segments metadata:
+- `{speaker}.{format}` (default format: wav)
+- Speaker names come from segments.json (e.g., `spk0`, `spk1`, `denoised` for denoising-only mode)
+- Output format can be specified with `--output-format` (wav, flac, ogg, etc.)
+
+Examples:
+```
+embedded/spk0.wav
+embedded/spk1.wav
+embedded/denoised.wav  (if using --denoising-only mode)
+```
+
+**For distributed processing:**
+
+When using `--num-groups` with `gss-enhance`, each group generates its own segment files:
+
+```bash
+# Run in parallel: group 0, 1, 2, 3 (e.g., 4 SLURM jobs)
+gss-enhance --audio meeting.wav --diarization meeting.rttm \
+  --mc-ref-channel none \
+  --output-seglst segments_group{group_id} \
+  --num-groups 4 --group-id 0 \
+  --output-dir ./enhanced
+
+# After all groups complete, embed using all segment files:
+gss-embed --segments enhanced/segments_group0.json \
+          enhanced/segments_group1.json \
+          enhanced/segments_group2.json \
+          enhanced/segments_group3.json \
+  --audio meeting.wav \
+  --output-dir ./embedded
+```
+
+**Generated segment metadata:**
+
+`gss-enhance --output-seglst [prefix]` produces (per group):
+
+- `{prefix}.seglst` — meeteval SegLST format (standard diarization format)
+- `{prefix}.json` — JSON format with audio paths (for `gss-embed`)
+
+Default prefix is `segments`. Placeholders like `{group_id}` are replaced.
+
+**Channel offset synchronization:**
+
+If `gss-enhance` was run with `--channel-offsets`, use the same offsets in `gss-embed`:
+
+```bash
+# Single multi-channel file
+gss-enhance --audio meeting_stereo.wav \
+  --diarization meeting.rttm \
+  --mc-ref-channel none \
+  --channel-offsets 0 -0.1 \
+  --channel-offset-unit seconds \
+  --output-seglst segments \
+  --output-dir ./enhanced
+
+gss-embed --segments enhanced/segments.json \
+  --audio meeting_stereo.wav \
+  --channel-offsets 0 -0.1 \
+  --channel-offset-unit seconds \
+  --output-dir ./embedded
+
+# Multiple audio files (each as a channel)
+gss-enhance --audio ch0.wav ch1.wav ch2.wav \
+  --diarization meeting.rttm \
+  --mc-ref-channel none \
+  --channel-offsets 0 -0.1 0.05 \
+  --channel-offset-unit seconds \
+  --output-seglst segments \
+  --output-dir ./enhanced
+
+gss-embed --segments enhanced/segments.json \
+  --audio ch0.wav ch1.wav ch2.wav \
+  --channel-offsets 0 -0.1 0.05 \
+  --channel-offset-unit seconds \
+  --output-dir ./embedded
+```
+
+**Multi-channel input handling:**
+
+If gss-enhance used multiple audio files with mismatched lengths, specify the same resolution mode in gss-embed:
+
+```bash
+# If files differ in length, must specify mode (must match gss-enhance)
+gss-enhance --audio ch0.wav ch1.wav \
+  --diarization meeting.rttm \
+  --mc-ref-channel none \
+  --channel-length-mode trim \
+  --output-seglst segments \
+  --output-dir ./enhanced
+
+gss-embed --segments enhanced/segments.json \
+  --audio ch0.wav ch1.wav \
+  --channel-length-mode trim \
+  --output-dir ./embedded
+```
+
+**Key points:**
+
+- Original audio file(s) must match the input to `gss-enhance` (same sample rate, channels, order, and lengths)
+- Enhanced output channels must match original channels (error otherwise)
+- Each speaker receives one full-length audio file with only their enhanced segments embedded
+- Non-enhanced regions preserve the original audio
+- Channel offsets and length handling must be identical between `gss-enhance` and `gss-embed`
+- Single multi-channel file OR multiple single-channel files, but not mixed
+
+See `gss-embed --help` for all options.
+
+## Diarization (Optional)
+
+To generate speaker activity from an audio file, use external diarization tools.
+
+### Single-channel diarization
+
+Generate diarization using [pyannote](https://github.com/pyannote/pyannote-audio):
+
+```python
+from pyannote.audio import Pipeline
+import torch
+
+# Load pretrained diarization model (requires HuggingFace token)
+# Get token at https://huggingface.co/settings/tokens
+pipeline = Pipeline.from_pretrained(
+    "pyannote/speaker-diarization-3.1",
+    use_auth_token="<your_hf_token>"
+)
+
+# Move to GPU for faster processing
+pipeline.to(torch.device("cuda:0"))
+
+# Run diarization on audio file
+diarization = pipeline("meeting.wav")
+
+# Save as RTTM format (compatible with GSS)
+with open("meeting.rttm", "w") as f:
+    diarization.write_rttm(f)
+
+# Inspect diarization output
+for turn, _, speaker in diarization.itertracks(yield_label=True):
+    print(f"{turn.start:.2f}s - {turn.end:.2f}s: {speaker}")
+```
+
+Then use the generated RTTM file with GSS as shown in the [Usage](#usage) examples.
+
+### Multi-channel diarization
+
+For multi-channel audio, run diarization on each channel independently and merge
+the results using [dover-lap](https://github.com/desh2608/dover-lap):
+
+```python
+from pyannote.audio import Pipeline
+import soundfile as sf
+import torch
+import numpy as np
+
+# Load pipeline
+pipeline = Pipeline.from_pretrained(
+    "pyannote/speaker-diarization-3.1",
+    use_auth_token="<your_hf_token>"
+)
+pipeline.to(torch.device("cuda:0"))
+
+# Load multi-channel audio
+audio_multichannel, sr = sf.read("meeting.wav")  # shape: (samples, channels)
+
+# Run diarization on each channel
+diarizations = []
+for ch_idx in range(audio_multichannel.shape[1]):
+    channel_audio = audio_multichannel[:, ch_idx]
+    
+    # Write temporary mono audio
+    temp_file = f"_temp_ch{ch_idx}.wav"
+    sf.write(temp_file, channel_audio, sr)
+    
+    # Run diarization
+    diarization = pipeline(temp_file)
+    diarizations.append(diarization)
+
+# Merge using dover-lap
+from dover_lap import DiariaziationComparator
+
+# Convert to RTTM strings for merging
+rttms = [str(d) for d in diarizations]
+merged = DiariaziationComparator().optimal_threshold(rttms)
+
+# Save merged result
+with open("meeting_merged.rttm", "w") as f:
+    merged.write_rttm(f)
+```
+
+Or use the command-line tool:
+
+```bash
+gss-diarize \
+  --audio ch0.wav ch1.wav ch2.wav \
+  --output meeting.rttm \
+  --hf-token <your_hf_token>
+```
+
+**Distributed multi-channel diarization:**
+
+For parallel processing of multiple channels, run diarization on each channel separately and merge:
+
+```bash
+# Process each channel in parallel (e.g., 3 SLURM jobs)
+gss-diarize --audio ch0.wav --output ch0.rttm --hf-token <token>
+gss-diarize --audio ch1.wav --output ch1.rttm --hf-token <token>
+gss-diarize --audio ch2.wav --output ch2.rttm --hf-token <token>
+
+# After all channels complete, merge the results
+gss-diarize --merge-only --audio ch0.rttm ch1.rttm ch2.rttm \
+  --output merged.rttm
+```
+
+**Channel selection:**
+
+For single multi-channel files, select specific channels to process:
+
+```bash
+# 4-channel audio: process only channels 0 and 2
+gss-diarize --audio meeting_4ch.wav \
+  --channels 0 2 \
+  --output meeting.rttm \
+  --hf-token <token>
+
+# Useful for microphone array selection or debugging specific mics
+```
+
+## Iterative denoising workflow
+
+For higher-quality speaker separation, combine denoising-only mode with diarization and re-processing:
+
+```bash
+# First pass: denoise to improve diarization (MIMO mode: all channels needed for embedding)
+gss-enhance --audio meeting.wav --diarization meeting.rttm \
+  --mc-ref-channel none \
+  --denoising-only \
+  --output-seglst segments \
+  --output-dir ./pass1_denoised
+
+# Combine denoised segments back into audio
+gss-embed --segments ./pass1_denoised/segments.json \
+  --audio meeting.wav \
+  --output-dir ./pass1_embedded
+
+# Re-run diarization on cleaner audio (higher confidence)
+gss-diarize --audio pass1_embedded/denoised.wav \
+  --output meeting_rttm_v2 \
+  --hf-token <token>
+
+# Second pass: speaker separation with better diarization
+gss-enhance --audio meeting.wav \
+  --diarization meeting_rttm_v2 \
+  --output-dir ./pass2_speakers
+```
+
+This approach might yield better speaker separation by first removing noise, then performing
+diarization on the cleaner signal with higher confidence.
+
+## Low-level Python API (composing modules directly)
 
 The individual sub-modules are also exported and can be composed directly in
 spectrogram domain, avoiding redundant STFT/iSTFT round-trips:
@@ -274,6 +724,8 @@ Enhance diarized segments from a long recording.
 - **`channel_length_mode`** — when `audio_path` is a list and lengths mismatch: `'error'` (raise), `'trim'` (to shortest), `'pad'` (zero-pad to longest)
 - **`channel_offsets`** — optional per-channel shifts; positive delays a channel (prepend zeros), negative advances a channel (drop leading samples)
 - **`channel_offset_unit`** — unit for `channel_offsets`: `'samples'` (default) or `'seconds'`
+- **`num_groups`** — number of groups to partition segments into for distributed processing (default: 1 = no partitioning). Useful for SLURM/distributed environments where each job processes a subset of segments
+- **`group_id`** — zero-based group index to process (must satisfy `0 <= group_id < num_groups`; default: 0). Segments are partitioned with balanced total duration across groups using a greedy algorithm
 - **Returns** list of dicts, each containing segment metadata and `enhanced_audio`
 
 ### `GSS.enhance_auto(...)`
@@ -331,6 +783,57 @@ Run the tests:
 ```bash
 pip install -e .
 python -m pytest tests/ -v
+```
+
+## Command-Line Usage
+
+After installation, use the `gss-enhance-diarization` command:
+
+Single speaker enhancement:
+
+```bash
+gss-enhance-diarization meeting.wav meeting.rttm \
+  --speaker-id 0 \
+  --output-dir ./enhanced
+```
+
+All speakers:
+
+```bash
+gss-enhance-diarization meeting.wav meeting.rttm \
+  --output-dir ./enhanced
+```
+
+Multi-diarization file input (merged by default):
+
+```bash
+gss-enhance-diarization meeting.wav \
+  spkA.rttm spkB.rttm \
+  --output-dir ./enhanced
+```
+
+Multi-diarization with time concatenation:
+
+```bash
+gss-enhance-diarization meeting.wav \
+  part1.rttm part2.rttm \
+  --diarization-time-concat \
+  --output-dir ./enhanced
+```
+
+Multi-channel input (separate files):
+
+```bash
+gss-enhance-diarization ch0.wav ch1.wav ch2.wav \
+  meeting.rttm \
+  --channel-length-mode trim \
+  --output-dir ./enhanced
+```
+
+For all available options:
+
+```bash
+gss-enhance-diarization --help
 ```
 
 Run the example:
