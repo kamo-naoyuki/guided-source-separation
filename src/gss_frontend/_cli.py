@@ -264,7 +264,7 @@ Examples:
         "--mode",
         type=str,
         choices=["standard", "oom_fallback"],
-        default="standard",
+        default="oom_fallback",
         help="Enhancement mode.",
     )
 

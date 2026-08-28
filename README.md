@@ -173,34 +173,35 @@ The `gss-enhance` CLI tool processes audio files with diarization directly from 
 Use `--audio` for audio file(s) and `--diarization` for diarization file(s):
 
 ```bash
-gss-enhance --audio meeting.wav --diarization meeting.rttm --output-dir ./enhanced
+gss-enhance --audio meeting.wav --diarization meeting.rttm --device cuda --output-dir ./enhanced
 
 # Process with explicit speaker ID
-gss-enhance --audio meeting.wav --diarization meeting.rttm --speaker-id 0 --output-dir ./enhanced
+gss-enhance --audio meeting.wav --diarization meeting.rttm --speaker-id 0 --device cuda --output-dir ./enhanced
 
 # Multiple speakers
-gss-enhance --audio meeting.wav --diarization meeting.rttm --speaker-id spkA spkB --output-dir ./enhanced
-
-# Denoising-only mode (remove background noise, keep all speakers)
-gss-enhance --audio meeting.wav --diarization meeting.rttm --denoising-only --output-dir ./enhanced
+gss-enhance --audio meeting.wav --diarization meeting.rttm --speaker-id spkA spkB --device cuda --output-dir ./enhanced
 
 # Multi-file audio and diarization (merged by default)
 gss-enhance --audio ch0.wav ch1.wav \
   --diarization meeting_part1.rttm meeting_part2.rttm \
   --channel-length-mode trim \
+  --device cuda \
   --output-dir ./enhanced
 
 # Output in different audio formats (WAV, FLAC, OGG)
 gss-enhance --audio meeting.wav --diarization meeting.rttm \
   --output-format wav \
+  --device cuda \
   --output-dir ./enhanced_wav
 
 gss-enhance --audio meeting.wav --diarization meeting.rttm \
   --output-format flac \
+  --device cuda \
   --output-dir ./enhanced_flac
 
 gss-enhance --audio meeting.wav --diarization meeting.rttm \
   --output-format ogg \
+  --device cuda \
   --output-dir ./enhanced_ogg
 
 # With UEM and custom context
@@ -224,16 +225,19 @@ gss-enhance --audio meeting.wav --diarization meeting.rttm \
   --output-dir ./enhanced_no_dereverb
 
 # Denoising-only mode
-# Remove background noise while keeping all speakers unchanged
+# Beamformer treats all speakers as targets and suppresses only background noise
+# (instead of isolating each speaker individually)
 # Useful for meeting preprocessing when speaker separation is not needed
 gss-enhance --audio meeting.wav --diarization meeting.rttm \
   --denoising-only \
+  --device cuda \
   --output-dir ./enhanced_denoised
 
 # Input channel selection (for single multi-channel file)
 # Process only specific channels from a multi-channel audio file
 gss-enhance --audio meeting_4ch.wav --diarization meeting.rttm \
   --channels 0 2 \
+  --device cuda \
   --output-dir ./enhanced
 
 # Useful for microphone array selection or processing specific mics
@@ -309,9 +313,11 @@ See `gss-enhance --help` for all options.
 
 ### Denoising-only mode
 
-By default, `gss-enhance` processes each speaker individually, isolating their speech from
-noise and other speakers. For meeting preprocessing, you may want to keep all speakers while
-removing only background noise. Use `--denoising-only`:
+By default, `gss-enhance` processes each speaker individually: the beamformer treats
+each speaker as a target and suppresses other speakers + background noise simultaneously.
+For meeting preprocessing, you may want to keep all speakers while removing only background
+noise. Use `--denoising-only` to change the beamformer behavior: treat **all speakers as
+targets** and suppress **only background noise**:
 
 ```bash
 gss-enhance --audio meeting.wav --diarization meeting.rttm \
@@ -319,11 +325,13 @@ gss-enhance --audio meeting.wav --diarization meeting.rttm \
   --output-dir ./enhanced_denoised
 ```
 
-This mode:
-- Extracts all speaker activity regions from diarization
-- Merges overlapping speaker regions into continuous denoising intervals
-- Removes background noise outside of speaker regions
-- Outputs one denoised segment per merged interval (combining all speakers)
+**How it works:**
+
+- **Beamformer target**: All speakers combined (not individual speakers)
+- **Suppression**: Background noise only (keeps all speech overlaps unchanged)
+- Implementation: Merges all overlapping speaker regions into continuous denoising intervals,
+  then applies beamforming with the merged regions as activity
+- Output: One denoised segment per merged interval (combining all speakers)
 - Ignores `--speaker-id` if provided
 - Can be combined with distributed processing (`--num-groups`)
 
