@@ -1317,8 +1317,14 @@ class GSS:
         num_chunks: int = 1,
         num_groups: int = 1,
         group_id: int = 0,
-    ) -> List[Dict[str, Any]]:
+    ):
         """Enhance all diarized target-speaker utterances from a long recording.
+        
+        Yields
+        ------
+        dict
+            Enhanced segment with keys: speaker, speaker_id, segment_index, 
+            segment_start, segment_end, sample_rate, enhanced_audio
 
         Parameters
         ----------
@@ -1542,7 +1548,7 @@ class GSS:
             sample_rate=sample_rate,
         )
 
-        outputs = []
+
         for idx, segment in enumerate(target_segments):
             target_speaker = segment["speaker"]
             target_idx = speakers.index(target_speaker)
@@ -1575,18 +1581,15 @@ class GSS:
                 num_chunks=num_chunks,
                 mode=mode,
             )
-            outputs.append(
-                {
-                    "speaker": target_speaker,
-                    "speaker_id": target_idx,
-                    "segment_index": group_segment_indices[idx],  # Use global index for consistent naming
-                    "segment_start": segment["start"],
-                    "segment_end": segment["end"],
-                    "sample_rate": sample_rate,
-                    "enhanced_audio": enhanced,
-                }
-            )
-        return outputs
+            yield {
+                "speaker": target_speaker,
+                "speaker_id": target_idx,
+                "segment_index": group_segment_indices[idx],  # Use global index for consistent naming
+                "segment_start": segment["start"],
+                "segment_end": segment["end"],
+                "sample_rate": sample_rate,
+                "enhanced_audio": enhanced,
+            }
 
     # ------------------------------------------------------------------
     # Internal implementation

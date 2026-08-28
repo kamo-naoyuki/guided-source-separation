@@ -185,6 +185,24 @@ Examples:
             sys.exit(1)
 
         input_files = args.audio
+        
+        logger.info("=" * 60)
+        logger.info("Diarization Merging Task")
+        logger.info("=" * 60)
+        logger.info(f"  Input files: {len(input_files)}")
+        for i, f in enumerate(input_files, 1):
+            logger.info(f"    [{i}] {f}")
+        logger.info(f"  Output file: {args.output}")
+        logger.info(f"  Output format: {output_format}")
+        logger.info(f"  Label mapping: {args.label_mapping}")
+        if args.uem:
+            logger.info(f"  UEM file: {args.uem}")
+        if args.threshold is not None:
+            logger.info(f"  Threshold: {args.threshold}")
+        else:
+            logger.info(f"  Threshold: automatic (optimal)")
+        logger.info("=" * 60)
+        
         logger.info(f"Merging {len(input_files)} files...")
 
         # Load diarization data from files (supports JSON and RTTM formats)
@@ -254,9 +272,20 @@ Examples:
         # Log merged stats
         num_speakers = len(set(label for _, _, label in merged.itertracks(yield_label=True)))
         num_turns = len(list(merged.itertracks()))
-        logger.info(
-            f"Merged result: {num_speakers} speakers, {num_turns} turns"
-        )
+        
+        # Calculate total duration
+        total_duration = 0.0
+        for turn, _, _ in merged.itertracks(yield_label=True):
+            total_duration = max(total_duration, turn.end)
+        
+        logger.info("=" * 60)
+        logger.info("Diarization Merging Complete")
+        logger.info("=" * 60)
+        logger.info(f"  Number of speakers: {num_speakers}")
+        logger.info(f"  Number of turns: {num_turns}")
+        logger.info(f"  Total duration: {total_duration:.2f}s")
+        logger.info(f"  Output file: {output_file}")
+        logger.info("=" * 60)
         return
 
     # Load pipeline
@@ -279,6 +308,30 @@ Examples:
         except Exception as e:
             logger.error(f"Failed to load UEM file {args.uem}: {e}")
             sys.exit(1)
+
+    # Print task information
+    logger.info("=" * 60)
+    logger.info("Diarization Task")
+    logger.info("=" * 60)
+    logger.info(f"  Input audio files: {len(args.audio)}")
+    for i, f in enumerate(args.audio, 1):
+        logger.info(f"    [{i}] {f}")
+    logger.info(f"  Model: {args.model}")
+    logger.info(f"  Device: {args.device}")
+    if args.channels:
+        logger.info(f"  Channels: {args.channels}")
+    if args.uem:
+        logger.info(f"  UEM file: {args.uem}")
+    logger.info(f"  Label mapping: {args.label_mapping}")
+    if args.threshold is not None:
+        logger.info(f"  Threshold: {args.threshold}")
+    else:
+        logger.info(f"  Threshold: automatic (optimal)")
+    if args.random_seed is not None:
+        logger.info(f"  Random seed: {args.random_seed}")
+    logger.info(f"  Output file: {args.output}")
+    logger.info(f"  Output format: {output_format}")
+    logger.info("=" * 60)
 
     # Prepare channel audio files
     channel_files = []
@@ -413,9 +466,21 @@ def _process_and_merge_channels(
     # Log merged stats
     num_speakers = len(set(label for _, _, label in merged.itertracks(yield_label=True)))
     num_turns = len(list(merged.itertracks()))
-    logger.info(
-        f"Merged result: {num_speakers} speakers, {num_turns} turns"
-    )
+    
+    # Calculate total duration
+    total_duration = 0.0
+    for turn, _, _ in merged.itertracks(yield_label=True):
+        total_duration = max(total_duration, turn.end)
+    
+    logger.info("=" * 60)
+    logger.info("Diarization Processing Complete")
+    logger.info("=" * 60)
+    logger.info(f"  Channels processed: {len(channel_files)}")
+    logger.info(f"  Number of speakers: {num_speakers}")
+    logger.info(f"  Number of turns: {num_turns}")
+    logger.info(f"  Total duration: {total_duration:.2f}s")
+    logger.info(f"  Output file: {output_file}")
+    logger.info("=" * 60)
 
 
 def _save_diarization(diarization, output_file: Path, output_format: str) -> None:

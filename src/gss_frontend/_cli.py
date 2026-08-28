@@ -478,6 +478,53 @@ Examples:
     # Run enhancement
     logger.info("Running enhancement from diarization...")
     
+    # Print basic information about the task
+    try:
+        import meeteval
+        
+        # Load diarization to get statistics
+        diar_file = str(diarization) if isinstance(diarization, (str, Path)) else str(diarization[0])
+        diar_data = meeteval.io.load(diar_file)
+        
+        # Get unique speakers
+        speakers = set()
+        total_duration = 0.0
+        for segment in diar_data:
+            # Handle both dict and Segment object formats
+            if isinstance(segment, dict):
+                speaker = segment.get("speaker", segment.get("spk", "unknown"))
+                end = segment.get("end", segment.get("end_time", segment.get("end_sample", 0)))
+            else:
+                speaker = segment.speaker
+                end = segment.end
+            
+            speakers.add(speaker)
+            total_duration = max(total_duration, end)
+        
+        num_speakers = len(speakers)
+        num_segments = len(diar_data)
+        
+        logger.info("=" * 60)
+        logger.info("Enhancement Task Summary")
+        logger.info("=" * 60)
+        logger.info(f"  Audio file: {audio_path}")
+        logger.info(f"  Diarization file: {diar_file}")
+        logger.info(f"  Number of speakers: {num_speakers}")
+        logger.info(f"  Speaker labels: {sorted(speakers)}")
+        logger.info(f"  Number of segments: {num_segments}")
+        logger.info(f"  Total duration: {total_duration:.2f}s")
+        if args.denoising_only:
+            logger.info(f"  Mode: DENOISING-ONLY (merging all speakers)")
+        elif speaker_id is not None:
+            logger.info(f"  Mode: Single speaker extraction (speaker_id={speaker_id})")
+        else:
+            logger.info(f"  Mode: Multi-speaker enhancement")
+        logger.info("=" * 60)
+    except Exception as e:
+        logger.warning(f"Could not load diarization for stats: {type(e).__name__}: {e}")
+        import traceback
+        logger.debug(f"Traceback:\n{traceback.format_exc()}")
+    
     # For denoising-only mode, merge all speaker segments
     enhancement_diarization = diarization
     if args.denoising_only:
@@ -560,17 +607,30 @@ Examples:
     output_dir.mkdir(parents=True, exist_ok=True)
     logger.info(f"Output directory: {output_dir}")
 
-    # Save enhanced segments
-    logger.info(f"Saving {len(segments)} enhanced segments...")
+    # Print processing results summary
+    logger.info("=" * 60)
+    logger.info("Enhancement Processing")
+    logger.info("=" * 60)
+
+    # Process segments and save incrementally
+    logger.info("Saving enhanced segments...")
     seglst_segments = []
+    speakers_summary = {}
+    total_segments = 0
     
-    for item in segments:
+    for idx, item in enumerate(segments):
         speaker = item["speaker"]
         seg_start = item["segment_start"]
         seg_end = item["segment_end"]
         sample_rate = item["sample_rate"]
         enhanced_audio = item["enhanced_audio"]
         segment_index = item["segment_index"]  # Use global index for consistent naming across groups
+
+        total_segments += 1
+
+        # Display progress
+        progress = f"[segment {idx+1}]"
+        logger.info(f"{progress} Processing segment: speaker={speaker}, time={seg_start:.2f}s-{seg_end:.2f}s")
 
         # Format output filename with specified extension
         output_format = args.output_format.lower().lstrip('.')  # Remove leading dot if present
@@ -584,6 +644,11 @@ Examples:
         subtype = "PCM_16" if output_format in {"wav", "flac", "aiff"} else None
         sf.write(str(filepath), enhanced_audio, sample_rate, subtype=subtype, format=output_format.upper())
         logger.info(f"  Saved: {filepath}")
+        
+        # Track speaker counts for summary
+        if speaker not in speakers_summary:
+            speakers_summary[speaker] = 0
+        speakers_summary[speaker] += 1
         
         # Collect metadata for SegLST using meeteval
         seglst_segments.append({
@@ -627,6 +692,16 @@ Examples:
         
         logger.info(f"SegLST metadata saved: {seglst_file}")
         logger.info(f"SegLST JSON (for gss-embed) saved: {seglst_json}")
+
+    # Print processing completion summary
+    logger.info("=" * 60)
+    logger.info("Enhancement Processing Complete")
+    logger.info("=" * 60)
+    logger.info(f"  Segments processed: {total_segments}")
+    
+    for speaker, count in sorted(speakers_summary.items()):
+        logger.info(f"    Speaker '{speaker}': {count} segments")
+    logger.info("=" * 60)
 
     logger.info("Done!")
 

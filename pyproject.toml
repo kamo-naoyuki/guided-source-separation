@@ -16,7 +16,7 @@ dependencies = [
 
 [project.scripts]
 gss-enhance = "gss_frontend._cli:main"
-gss-diarize = "gss_frontend._multichannel_diarization_cli:main"
+gss-diarize = "gss_frontend._diarization_cli:main"
 gss-embed = "gss_frontend._embed_cli:main"
 
 [project.optional-dependencies]

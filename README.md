@@ -156,6 +156,7 @@ segments = frontend.enhance_from_diarization(
     # group_id=0,                  # This job processes segments in group 0
 )
 
+# segments is a generator that yields results incrementally (memory-efficient)
 for item in segments:
     print(
         item["speaker"],
@@ -766,7 +767,12 @@ Enhance diarized segments from a long recording.
 - **`channel_offset_unit`** — unit for `channel_offsets`: `'samples'` (default) or `'seconds'`
 - **`num_groups`** — number of groups to partition segments into for distributed processing (default: 1 = no partitioning). Useful for SLURM/distributed environments where each job processes a subset of segments
 - **`group_id`** — zero-based group index to process (must satisfy `0 <= group_id < num_groups`; default: 0). Segments are partitioned with balanced total duration across groups using a greedy algorithm
-- **Returns** list of dicts, each containing segment metadata and `enhanced_audio`
+- **Returns** generator of dicts (yields one at a time for memory efficiency), each containing:
+  - `speaker` — speaker label (str)
+  - `speaker_id` — speaker index (int, 0-based in lexicographic order)
+  - `segment_start` / `segment_end` — segment timing (seconds)
+  - `sample_rate` — audio sample rate (Hz)
+  - `enhanced_audio` — enhanced waveform `(samples,)` float32
 
 ### `GSS.enhance_auto(...)`
 

@@ -154,11 +154,32 @@ Examples:
 
     logger.info(f"Found {len(segments_by_speaker)} speakers")
 
+    # Print task information
+    logger.info("=" * 60)
+    logger.info("Embedding Task")
+    logger.info("=" * 60)
+    logger.info(f"  Segment metadata files: {len(args.segments)}")
+    for i, f in enumerate(args.segments, 1):
+        logger.info(f"    [{i}] {f}")
+    logger.info(f"  Total segments: {len(all_segments)}")
+    logger.info(f"  Speakers: {len(segments_by_speaker)}")
+    for speaker in sorted(segments_by_speaker.keys()):
+        count = len(segments_by_speaker[speaker])
+        logger.info(f"    - {speaker}: {count} segments")
+    logger.info(f"  Audio files: {len(args.audio)}")
+    for i, f in enumerate(args.audio, 1):
+        logger.info(f"    [{i}] {f}")
+    logger.info(f"  Audio shape: {original_audio.shape[0]} samples, {original_audio.shape[1]} channels, {sr} Hz")
+    logger.info(f"  Output directory: {args.output_dir}")
+    logger.info(f"  Output format: {args.output_format}")
+    logger.info("=" * 60)
+
     # Create output directory
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Process each speaker
+    num_saved = 0
     for speaker, segments in segments_by_speaker.items():
         logger.info(f"Processing speaker: {speaker}")
         embedded_audio = _embed_speaker_segments(
@@ -187,6 +208,15 @@ Examples:
             format=output_format.upper(),
         )
         logger.info(f"  Saved: {output_file}")
+        num_saved += 1
+
+    logger.info("=" * 60)
+    logger.info("Embedding Complete")
+    logger.info("=" * 60)
+    logger.info(f"  Speakers processed: {len(segments_by_speaker)}")
+    logger.info(f"  Files saved: {num_saved}")
+    logger.info(f"  Output directory: {output_dir}")
+    logger.info("=" * 60)
 
     logger.info("Done!")
 
