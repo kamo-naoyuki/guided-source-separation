@@ -316,13 +316,13 @@ class TestDiarizationHelpers:
         monkeypatch.setattr("torchaudio.load", _fake_torchaudio_load)
         monkeypatch.setattr(frontend, "enhance_segment", _fake_enhance_segment)
 
-        outputs = frontend.enhance_from_diarization(
+        outputs = list(frontend.enhance_from_diarization(
             audio_path="dummy.wav",
             diarization="dummy.rttm",
             speaker_id="spkA",
             context_left_seconds=0.5,
             context_right_seconds=0.5,
-        )
+        ))
 
         assert len(outputs) == 2
         assert len(calls) == 2
@@ -355,11 +355,11 @@ class TestDiarizationHelpers:
         monkeypatch.setattr("torchaudio.load", _fake_torchaudio_load)
         monkeypatch.setattr(frontend, "enhance_segment", _fake_enhance_segment)
 
-        outputs = frontend.enhance_from_diarization(
+        outputs = list(frontend.enhance_from_diarization(
             audio_path="dummy.wav",
             diarization="dummy.rttm",
             speaker_id=1,
-        )
+        ))
 
         assert len(outputs) == 1
         assert outputs[0]["speaker"] == "spkB"
@@ -393,10 +393,10 @@ class TestDiarizationHelpers:
         monkeypatch.setattr("torchaudio.load", _fake_torchaudio_load)
         monkeypatch.setattr(frontend, "enhance_segment", _fake_enhance_segment)
 
-        outputs = frontend.enhance_from_diarization(
+        outputs = list(frontend.enhance_from_diarization(
             audio_path="dummy.wav",
             diarization="dummy.rttm",
-        )
+        ))
 
         assert len(outputs) == 3
         assert [out["speaker"] for out in outputs] == ["spkA", "spkB", "spkA"]
@@ -429,11 +429,11 @@ class TestDiarizationHelpers:
         monkeypatch.setattr("torchaudio.load", _fake_torchaudio_load)
         monkeypatch.setattr(frontend, "enhance_segment", _fake_enhance_segment)
 
-        outputs = frontend.enhance_from_diarization(
+        outputs = list(frontend.enhance_from_diarization(
             audio_path="dummy.wav",
             diarization="dummy.rttm",
             speaker_id=["spkC", 0],
-        )
+        ))
 
         assert len(outputs) == 2
         assert [out["speaker"] for out in outputs] == ["spkA", "spkC"]
@@ -471,12 +471,12 @@ class TestDiarizationHelpers:
         monkeypatch.setattr("torchaudio.load", _fake_torchaudio_load)
         monkeypatch.setattr(frontend, "enhance_segment", _fake_enhance_segment)
 
-        outputs = frontend.enhance_from_diarization(
+        outputs = list(frontend.enhance_from_diarization(
             audio_path="dummy.wav",
             diarization="dummy.rttm",
             uem="dummy.uem",
             speaker_id="spkA",
-        )
+        ))
 
         assert len(outputs) == 1
         assert len(calls) == 1
@@ -513,14 +513,14 @@ class TestDiarizationHelpers:
         monkeypatch.setattr("torchaudio.load", _fake_torchaudio_load)
         monkeypatch.setattr(frontend, "enhance_segment", _fake_enhance_segment)
 
-        frontend.enhance_from_diarization(
+        list(frontend.enhance_from_diarization(
             audio_path="dummy.wav",
             diarization="dummy.rttm",
             uem="dummy.uem",
             speaker_id="spkA",
             context_left_seconds=0.5,
             context_right_seconds=0.5,
-        )
+        ))
 
         assert len(calls) == 1
         assert calls[0]["context_left_seconds"] == pytest.approx(0.02)
@@ -554,12 +554,12 @@ class TestDiarizationHelpers:
         monkeypatch.setattr("torchaudio.load", _fake_torchaudio_load)
         monkeypatch.setattr(frontend, "enhance_segment", _fake_enhance_segment)
 
-        outputs = frontend.enhance_from_diarization(
+        outputs = list(frontend.enhance_from_diarization(
             audio_path="dummy.wav",
             diarization="dummy.rttm",
             speaker_id="spkA",
             valid_regions=[(0.10, 0.35)],
-        )
+        ))
 
         assert len(outputs) == 1
         assert len(calls) == 1
@@ -592,14 +592,14 @@ class TestDiarizationHelpers:
         monkeypatch.setattr("torchaudio.load", _fake_torchaudio_load)
         monkeypatch.setattr(frontend, "enhance_segment", _fake_enhance_segment)
 
-        frontend.enhance_from_diarization(
+        list(frontend.enhance_from_diarization(
             audio_path="dummy.wav",
             diarization="dummy.rttm",
             speaker_id="spkA",
             valid_regions=[{"start": 0.18, "end": 0.26}],
             context_left_seconds=0.5,
             context_right_seconds=0.5,
-        )
+        ))
 
         assert len(calls) == 1
         assert calls[0]["context_left_seconds"] == pytest.approx(0.02)
@@ -636,13 +636,13 @@ class TestDiarizationHelpers:
         monkeypatch.setattr("torchaudio.load", _fake_torchaudio_load)
         monkeypatch.setattr(frontend, "enhance_segment", _fake_enhance_segment)
 
-        outputs = frontend.enhance_from_diarization(
+        outputs = list(frontend.enhance_from_diarization(
             audio_path="dummy.wav",
             diarization="dummy.rttm",
             speaker_id="spkA",
             uem="dummy.uem",
             valid_regions=[(0.18, 0.25)],
-        )
+        ))
 
         assert len(outputs) == 1
         assert len(calls) == 1
@@ -678,12 +678,12 @@ class TestDiarizationHelpers:
         monkeypatch.setattr("torchaudio.load", _fake_torchaudio_load)
         monkeypatch.setattr(frontend, "enhance_segment", _fake_enhance_segment)
 
-        outputs = frontend.enhance_from_diarization(
+        outputs = list(frontend.enhance_from_diarization(
             audio_path=["ch0.wav", "ch1.wav"],
             diarization="dummy.rttm",
             speaker_id="spkA",
             channel_length_mode="trim",
-        )
+        ))
 
         assert len(outputs) == 1
         assert len(calls) == 1
@@ -708,12 +708,12 @@ class TestDiarizationHelpers:
         monkeypatch.setattr("torchaudio.load", _fake_torchaudio_load)
 
         with pytest.raises(ValueError):
-            frontend.enhance_from_diarization(
+            list(frontend.enhance_from_diarization(
                 audio_path=["ch0.wav", "ch1.wav"],
                 diarization="dummy.rttm",
                 speaker_id="spkA",
                 channel_length_mode="error",
-            )
+            ))
 
     def test_enhance_from_diarization_multi_file_audio_pad_mode(self, monkeypatch):
         frontend = GSS(device="cpu")
@@ -744,12 +744,12 @@ class TestDiarizationHelpers:
         monkeypatch.setattr("torchaudio.load", _fake_torchaudio_load)
         monkeypatch.setattr(frontend, "enhance_segment", _fake_enhance_segment)
 
-        outputs = frontend.enhance_from_diarization(
+        outputs = list(frontend.enhance_from_diarization(
             audio_path=["ch0.wav", "ch1.wav"],
             diarization="dummy.rttm",
             speaker_id="spkA",
             channel_length_mode="pad",
-        )
+        ))
 
         assert len(outputs) == 1
         assert len(calls) == 1
@@ -784,14 +784,14 @@ class TestDiarizationHelpers:
         monkeypatch.setattr("torchaudio.load", _fake_torchaudio_load)
         monkeypatch.setattr(frontend, "enhance_segment", _fake_enhance_segment)
 
-        outputs = frontend.enhance_from_diarization(
+        outputs = list(frontend.enhance_from_diarization(
             audio_path=["ch0.wav", "ch1.wav"],
             diarization="dummy.rttm",
             speaker_id="spkA",
             channel_length_mode="trim",
             channel_offsets=[0, 2],
             channel_offset_unit="samples",
-        )
+        ))
 
         assert len(outputs) == 1
         assert len(calls) == 1
@@ -822,12 +822,12 @@ class TestDiarizationHelpers:
         monkeypatch.setattr("torchaudio.load", _fake_torchaudio_load)
         monkeypatch.setattr(frontend, "enhance_segment", _fake_enhance_segment)
 
-        outputs = frontend.enhance_from_diarization(
+        outputs = list(frontend.enhance_from_diarization(
             audio_path="dummy.wav",
             diarization=["part1.rttm", "part2.rttm"],
             speaker_id="spkA",
             diarization_time_concat=True,
-        )
+        ))
 
         assert len(outputs) == 2
         assert calls[0]["segment_start"] == pytest.approx(0.1)
@@ -860,11 +860,11 @@ class TestDiarizationHelpers:
         monkeypatch.setattr("torchaudio.load", _fake_torchaudio_load)
         monkeypatch.setattr(frontend, "enhance_segment", _fake_enhance_segment)
 
-        outputs = frontend.enhance_from_diarization(
+        outputs = list(frontend.enhance_from_diarization(
             audio_path="dummy.wav",
             diarization=["spkA.rttm", "spkB.rttm"],
             speaker_id=None,
-        )
+        ))
 
         assert len(outputs) == 2
         # merge mode keeps original timestamps (no sequential shift)
@@ -888,12 +888,12 @@ class TestDiarizationHelpers:
         monkeypatch.setattr("torchaudio.load", _fake_torchaudio_load)
 
         with pytest.raises(ValueError):
-            frontend.enhance_from_diarization(
+            list(frontend.enhance_from_diarization(
                 audio_path="dummy.wav",
                 diarization="dummy.rttm",
                 speaker_id="spkA",
                 channel_offsets=[0],
-            )
+            ))
 
 
 # ---------------------------------------------------------------------------
