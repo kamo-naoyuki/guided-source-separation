@@ -964,6 +964,7 @@ class GSS:
         self.synthesis = SpectrogramToAudio(
             fft_length=stft_fft_length, hop_length=stft_hop_length
         ).to(self.device)
+        self.dereverb: Optional[MaskBasedDereverbWPE]
         if enable_dereverb:
             self.dereverb = MaskBasedDereverbWPE(
                 filter_length=dereverb_filter_length,
@@ -972,7 +973,7 @@ class GSS:
                 dtype=use_dtype,
             ).to(self.device)
         else:
-            self.dereverb: Optional[MaskBasedDereverbWPE] = None
+            self.dereverb = None
         self.gss = MaskEstimatorGSS(
             num_iterations=bss_iterations, dtype=use_dtype
         ).to(self.device)

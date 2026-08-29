@@ -23,4 +23,6 @@ jobs:
           python -m pip install -e . pytest meeteval
 
       - name: Run tests
+        env:
+          TORCHAUDIO_USE_BACKENDS_MATCHING_PHONEME_ALIGNMENT: 0
         run: python -m pytest tests/ -v
