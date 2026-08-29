@@ -508,8 +508,9 @@ Examples:
                 speaker = segment.speaker
                 end = segment.end
             
-            speakers.add(speaker)
-            total_duration = max(total_duration, end)
+            if speaker is not None and end is not None:
+                speakers.add(speaker)
+                total_duration = max(total_duration, float(end))
         
         num_speakers = len(speakers)
         num_segments = len(diar_data)

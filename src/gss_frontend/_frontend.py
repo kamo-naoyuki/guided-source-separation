@@ -306,11 +306,11 @@ def _partition_segments_by_duration(
         )
 
     # Extract result in group order
-    result: List[Optional[List[int]]] = [None] * num_groups
+    result_dict: Dict[int, List[int]] = {}
     for _, gid, seg_list in groups:
-        result[gid] = seg_list
+        result_dict[gid] = seg_list
 
-    return result
+    return [result_dict[gid] for gid in range(num_groups)]
 
 
 def _compute_group_statistics(
@@ -972,7 +972,7 @@ class GSS:
                 dtype=use_dtype,
             ).to(self.device)
         else:
-            self.dereverb = None
+            self.dereverb: Optional[MaskBasedDereverbWPE] = None
         self.gss = MaskEstimatorGSS(
             num_iterations=bss_iterations, dtype=use_dtype
         ).to(self.device)

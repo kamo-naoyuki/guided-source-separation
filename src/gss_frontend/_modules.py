@@ -148,7 +148,7 @@ class SpectrogramToAudio(torch.nn.Module):
         input = input.view(B, -1, F, N)
 
         with torch.amp.autocast('cuda', enabled=False):
-            output = self.istft(input.cfloat())  # (B, C, T)
+            output = self.istft(input.to(torch.complex64))  # (B, C, T)
 
         if input_length is not None:
             output_length = (input_length - 1) * self.istft.hop_length
@@ -450,13 +450,19 @@ class ReferenceChannelEstimatorSNR(torch.nn.Module):
 
         if subband_weighting and num_subbands is None:
             raise ValueError("num_subbands must be set when subband_weighting=True")
-        self.weight_s = torch.nn.Parameter(torch.ones(num_subbands)) if subband_weighting else None
-        self.weight_n = torch.nn.Parameter(torch.ones(num_subbands)) if subband_weighting else None
+        if subband_weighting:
+            assert num_subbands is not None
+            self.weight_s = torch.nn.Parameter(torch.ones(num_subbands))
+            self.weight_n = torch.nn.Parameter(torch.ones(num_subbands))
+        else:
+            self.weight_s = None
+            self.weight_n = None
 
     def forward(self, W: torch.Tensor, psd_s: torch.Tensor, psd_n: torch.Tensor) -> torch.Tensor:
         if self.subband_weighting:
             pow_s = torch.einsum("...jm,...jk,...km->...m", W.conj(), psd_s, W).abs()
             pow_n = torch.einsum("...jm,...jk,...km->...m", W.conj(), psd_n, W).abs()
+            assert self.weight_s is not None and self.weight_n is not None, "weights must be initialized when subband_weighting=True"
             pow_s = torch.sum(pow_s * self.weight_s.softmax(dim=0).unsqueeze(1), dim=-2)
             pow_n = torch.sum(pow_n * self.weight_n.softmax(dim=0).unsqueeze(1), dim=-2)
         else:
@@ -546,6 +552,8 @@ class ParametricMultichannelWienerFilter(torch.nn.Module):
         return t
 
     def apply_diag_reg(self, psd: torch.Tensor) -> torch.Tensor:
+        if self.diag_reg is None:
+            return psd
         diag_reg = self.diag_reg * self.trace(psd).real + self.eps
         return psd + torch.diag_embed(diag_reg.unsqueeze(-1) * torch.ones(psd.shape[-1], device=psd.device))
 
@@ -569,7 +577,7 @@ class ParametricMultichannelWienerFilter(torch.nn.Module):
         iodtype = input.dtype
 
         with torch.amp.autocast('cuda', enabled=False):
-            input = input.cdouble()
+            input = input.to(torch.complex128)
             mask_s = mask_s.double()
             mask_n = mask_n.double()
 
@@ -709,9 +717,9 @@ class MaskBasedBeamformer(torch.nn.Module):
 
             output.append(output_m)
 
-        output = torch.concatenate(output, dim=1)
+        output_tensor = torch.concatenate(output, dim=1)
 
         if input_length is not None:
-            output = output.masked_fill(length_mask[:, None, ...], 0.0)
+            output_tensor = output_tensor.masked_fill(length_mask[:, None, ...], 0.0)
 
-        return output, input_length
+        return output_tensor, input_length

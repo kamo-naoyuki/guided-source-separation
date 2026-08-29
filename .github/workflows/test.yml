@@ -20,7 +20,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e . pytest meeteval torchcodec
+          python -m pip install -e . pytest meeteval
 
       - name: Run tests
         run: python -m pytest tests/ -v
