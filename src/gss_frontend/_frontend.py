@@ -1655,7 +1655,7 @@ class GSS:
             x_enc_n = x_enc[..., n_start:n_end, :]
 
             # WPE dereverberation (optional)
-            if self.enable_dereverb:
+            if self.enable_dereverb and self.dereverb is not None:
                 if cpu_fallback:
                     x_enc_n, _ = _try_gpu_else_cpu(self.dereverb, input=x_enc_n)
                 else:
