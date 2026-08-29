@@ -6,7 +6,7 @@ import sys
 import logging
 import tempfile
 from pathlib import Path
-from typing import Optional, Sequence, List
+from typing import Optional, Sequence, List, Union
 
 import numpy as np
 import soundfile as sf
@@ -454,7 +454,7 @@ Examples:
         ]
 
     # Parse speaker_id
-    speaker_id: Optional[int | str] = None
+    speaker_id: Optional[Union[int, str]] = None
     if args.denoising_only:
         logger.info("Denoising-only mode: ignoring --speaker-id and processing all speakers")
         speaker_id = None

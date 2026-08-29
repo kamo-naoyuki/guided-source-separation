@@ -5,7 +5,7 @@ import json
 import logging
 import sys
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import soundfile as sf
@@ -226,7 +226,7 @@ Examples:
 def _load_audio_files(
     audio_files: List[Path],
     channel_length_mode: str = "error",
-) -> tuple[np.ndarray, int] | tuple[None, None]:
+) -> Union[Tuple[np.ndarray, int], Tuple[None, None]]:
     """Load audio file(s) and combine into multi-channel array.
 
     Args:
@@ -300,7 +300,7 @@ def _load_audio_files(
         return np.column_stack(channels), sr
 
 
-def _load_segments(seglst_file: Path) -> list | None:
+def _load_segments(seglst_file: Path) -> Optional[List]:
     """Load segments from SegLST (.seglst) or JSON (.json) file.
 
     Args:
@@ -349,9 +349,9 @@ def _embed_speaker_segments(
     segments: List[Dict],
     speaker: str,
     output_format: str,
-    channel_offsets: List[float] | None = None,
+    channel_offsets: Optional[List[float]] = None,
     channel_offset_unit: str = "samples",
-) -> np.ndarray | None:
+) -> Optional[np.ndarray]:
     """Embed enhanced segments for a single speaker into original audio.
 
     Args:
