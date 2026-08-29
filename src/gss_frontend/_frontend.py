@@ -381,7 +381,7 @@ def _segment_to_dict(segment: Any, default_session: Optional[str] = None) -> Dic
                 "end": float(end),
             }
 
-    start = _get(("start", "start_time", "begin", "offset"))
+    start = _get(("start", "start_time", "begin", "begin_time", "offset"))
     end = _get(("end", "end_time", "stop"))
     duration = _get(("duration", "dur"))
     speaker = _get(("speaker", "speaker_id", "label"))
@@ -1143,9 +1143,18 @@ class GSS:
                     return result.detach().cpu().numpy()
                 return result
 
-        result = result[left_context:]
-        if right_context > 0:
-            result = result[:-right_context]
+        # Drop context from time domain - handle both STANDARD and MIMO modes
+        if result.dim() == 1:
+            # Single-channel mode: (samples,)
+            result = result[left_context:]
+            if right_context > 0:
+                result = result[:-right_context]
+        else:
+            # MIMO mode: (num_channels, samples)
+            result = result[:, left_context:]
+            if right_context > 0:
+                result = result[:, :-right_context]
+        
         if is_numpy:
             return result.detach().cpu().numpy()
         return result

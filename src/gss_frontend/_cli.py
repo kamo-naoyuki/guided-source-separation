@@ -20,50 +20,60 @@ def _merge_overlapping_segments(segments: List) -> List:
     """Merge overlapping speaker segments into continuous denoising regions.
     
     Args:
-        segments: List of meeteval Segment objects
+        segments: List of meeteval Segment objects or dicts
         
     Returns:
-        List of merged Segment objects
+        List of merged dicts with normalized format
     """
-    import meeteval
-    
     if not segments:
         return []
     
+    # Helper to get segment properties regardless of type
+    def get_start(seg):
+        if isinstance(seg, dict):
+            return seg.get("start", 0)
+        return getattr(seg, "start", getattr(seg, "begin_time", 0))
+    
+    def get_end(seg):
+        if isinstance(seg, dict):
+            return seg.get("end", 0)
+        end = getattr(seg, "end", None)
+        if end is None and hasattr(seg, "duration"):
+            end = float(get_start(seg)) + float(seg.duration)
+        return end
+    
     # Sort by start time
-    sorted_segs = sorted(segments, key=lambda s: s.start)
+    sorted_segs = sorted(segments, key=lambda s: get_start(s))
     
     # Merge overlapping segments
     merged = []
-    current_start = sorted_segs[0].start
-    current_end = sorted_segs[0].end
+    current_start = get_start(sorted_segs[0])
+    current_end = get_end(sorted_segs[0])
     
     for seg in sorted_segs[1:]:
-        if seg.start <= current_end:
+        seg_start = get_start(seg)
+        seg_end = get_end(seg)
+        if seg_start <= current_end:
             # Overlapping or adjacent: extend current region
-            current_end = max(current_end, seg.end)
+            current_end = max(current_end, seg_end)
         else:
             # No overlap: save current region and start new one
-            merged.append(
-                meeteval.io.Segment(
-                    segment=f"{current_start:.2f}-{current_end:.2f}",
-                    speaker="all_speakers",
-                    start=current_start,
-                    end=current_end,
-                )
-            )
-            current_start = seg.start
-            current_end = seg.end
+            merged.append({
+                "segment": f"{current_start:.2f}-{current_end:.2f}",
+                "speaker": "all_speakers",
+                "start": float(current_start),
+                "end": float(current_end),
+            })
+            current_start = seg_start
+            current_end = seg_end
     
     # Don't forget the last segment
-    merged.append(
-        meeteval.io.Segment(
-            segment=f"{current_start:.2f}-{current_end:.2f}",
-            speaker="all_speakers",
-            start=current_start,
-            end=current_end,
-        )
-    )
+    merged.append({
+        "segment": f"{current_start:.2f}-{current_end:.2f}",
+        "speaker": "all_speakers",
+        "start": float(current_start),
+        "end": float(current_end),
+    })
     
     return merged
 
@@ -546,30 +556,49 @@ Examples:
             # Convert all segments to use a single unified speaker label
             unified_segments = []
             for segment in diar_loaded:
-                unified_segments.append(
-                    meeteval.io.Segment(
-                        segment=segment.segment,
-                        speaker="all_speakers",  # Unified label
-                        start=segment.start,
-                        end=segment.end,
-                    )
-                )
+                # Handle both RTTMLine and dict formats
+                if isinstance(segment, dict):
+                    seg_dict = {
+                        "segment": segment.get("segment", f"{segment.get('start', 0):.2f}-{segment.get('end', 0):.2f}"),
+                        "speaker": "all_speakers",
+                        "start": segment.get("start", 0),
+                        "end": segment.get("end", 0),
+                    }
+                else:
+                    # RTTMLine or similar object
+                    start = getattr(segment, "start", getattr(segment, "begin_time", 0))
+                    end = getattr(segment, "end", None)
+                    if end is None and hasattr(segment, "duration"):
+                        end = float(start) + float(segment.duration)
+                    seg_dict = {
+                        "segment": f"{start:.2f}-{end:.2f}",
+                        "speaker": "all_speakers",
+                        "start": float(start),
+                        "end": float(end),
+                    }
+                unified_segments.append(seg_dict)
             
-            # Create unified diarization
-            unified_diar = meeteval.io.SegmentList(segments=unified_segments)
-            
-            # Optionally merge overlapping segments
+            # Merge overlapping segments
             # This creates continuous denoised regions
             merged_segments = _merge_overlapping_segments(unified_segments)
             
             # Create temporary diarization file for processing
             import tempfile
             with tempfile.NamedTemporaryFile(mode='w', suffix='.rttm', delete=False) as f:
-                f.write(str(meeteval.io.SegmentList(segments=merged_segments)))
+                # Write in RTTM format
+                for idx, seg in enumerate(merged_segments):
+                    # RTTM format: <type> <file_id> <chnl> <begin_time> <duration> <ortho> <stype> <speaker_id> <confidence> <lookahead>
+                    session_id = seg.get("session_id", "meeting")
+                    start = float(seg["start"])
+                    end = float(seg["end"])
+                    duration = end - start
+                    speaker = seg.get("speaker", "all_speakers")
+                    f.write(f"SPEAKER {session_id} 1 {start:.2f} {duration:.2f} <NA> <NA> {speaker} <NA> <NA>\n")
+                
                 enhancement_diarization = f.name
                 logger.info(f"Merged diarization: {len(merged_segments)} denoised regions")
                 for seg in merged_segments:
-                    logger.debug(f"  Region: {seg.start:.2f}s - {seg.end:.2f}s")
+                    logger.debug(f"  Region: {seg['start']:.2f}s - {seg['end']:.2f}s")
             
         except Exception as e:
             logger.error(f"Failed to merge diarization for denoising: {e}")
@@ -641,8 +670,26 @@ Examples:
         filepath = output_dir / filename
 
         # Write with explicit subtype for lossless formats
-        subtype = "PCM_16" if output_format in {"wav", "flac", "aiff"} else None
-        sf.write(str(filepath), enhanced_audio, sample_rate, subtype=subtype, format=output_format.upper())
+        # soundfile expects (samples,) for mono or (samples, channels) for multi-channel
+        # If multi-channel (channels, samples), need to transpose to (samples, channels)
+        import torch
+        audio_to_write = enhanced_audio
+        
+        # Convert torch tensor to numpy if needed
+        if isinstance(audio_to_write, torch.Tensor):
+            audio_to_write = audio_to_write.cpu().numpy()
+        
+        # Transpose if multi-channel
+        if audio_to_write.ndim > 1:
+            audio_to_write = audio_to_write.T  # (channels, samples) -> (samples, channels)
+        
+        # Set format and subtype
+        subtype = None
+        if output_format in {"wav", "flac", "aiff"}:
+            subtype = "PCM_16"
+        
+        # soundfile.write requires format in lowercase or uppercase depending on libsndfile version
+        sf.write(str(filepath), audio_to_write, sample_rate, subtype=subtype)
         logger.info(f"  Saved: {filepath}")
         
         # Track speaker counts for summary
@@ -669,22 +716,11 @@ Examples:
         seglst_file = output_dir / f"{seglst_prefix}.seglst"
         seglst_json = output_dir / f"{seglst_prefix}.json"
         
-        # Convert to meeteval SegmentList format
-        seg_list = meeteval.io.SegmentList(
-            segments=[
-                meeteval.io.Segment(
-                    segment=s["segment"],
-                    speaker=s["speaker"],
-                    start=s["start"],
-                    end=s["end"],
-                )
-                for s in seglst_segments
-            ]
-        )
-        
         # Save as SegLST text format (meeteval standard)
+        # Format: "segment_spec speaker_label"
         with open(seglst_file, "w") as f:
-            f.write(str(seg_list))
+            for s in seglst_segments:
+                f.write(f"{s['segment']} {s['speaker']}\n")
         
         # Also save JSON with audio paths + metadata for gss-embed
         with open(seglst_json, "w") as f:

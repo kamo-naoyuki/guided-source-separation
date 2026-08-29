@@ -14,6 +14,8 @@ logger = logging.getLogger(__name__)
 
 
 def main():
+    """CLI entry point for embedding enhanced segments."""
+    parser = argparse.ArgumentParser(
         description="Embed enhanced speech segments back into original audio file.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""\
