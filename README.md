@@ -1,5 +1,8 @@
 # gss-frontend
 
+[![Test](https://github.com/kamo-naoyuki/guided-source-separation/workflows/Test/badge.svg)](https://github.com/kamo-naoyuki/guided-source-separation/actions/workflows/test.yml)
+[![pre-commit.ci status](https://results.pre-commit.ci/badge/github/kamo-naoyuki/guided-source-separation/main.svg)](https://results.pre-commit.ci/latest/github/kamo-naoyuki/guided-source-separation/main)
+
 A minimal, self-contained implementation of the NeMo-based GSS (Guided Source
 Separation) front-end for speech enhancement.
 
