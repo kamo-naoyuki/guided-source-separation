@@ -138,7 +138,7 @@ Examples:
     original_audio, sr = _load_audio_files(
         audio_files, args.channel_length_mode
     )
-    if original_audio is None:
+    if original_audio is None or sr is None:
         sys.exit(1)
     
     logger.info(
@@ -300,7 +300,7 @@ def _load_audio_files(
         return np.column_stack(channels), sr
 
 
-def _load_segments(seglst_file: Path) -> Optional[List]:
+def _load_segments(seglst_file: Path) -> Optional[List[Dict]]:
     """Load segments from SegLST (.seglst) or JSON (.json) file.
 
     Args:
@@ -312,7 +312,8 @@ def _load_segments(seglst_file: Path) -> Optional[List]:
     if seglst_file.suffix == ".json":
         # Load JSON format (has audio_path field)
         with open(seglst_file, "r") as f:
-            return json.load(f)
+            data = json.load(f)
+            return data if isinstance(data, list) else None
     
     elif seglst_file.suffix == ".seglst":
         # Load meeteval SegLST format
@@ -331,7 +332,7 @@ def _load_segments(seglst_file: Path) -> Optional[List]:
             with open(json_file, "r") as f:
                 json_data = json.load(f)
             # Merge SegLST with JSON audio paths
-            return json_data
+            return json_data if isinstance(json_data, list) else None
         else:
             logger.error(
                 f"SegLST file {seglst_file} found, but corresponding "
@@ -378,9 +379,9 @@ def _embed_speaker_segments(
     
     # Convert channel offsets to samples if needed
     if channel_offsets is not None and channel_offset_unit == "seconds":
-        channel_offsets_samples = [int(offset * sr) for offset in channel_offsets]
+        channel_offsets_samples: List[int] = [int(offset * sr) for offset in channel_offsets]
     else:
-        channel_offsets_samples = channel_offsets or [0] * original_audio.shape[1]
+        channel_offsets_samples = [int(o) if isinstance(o, float) else o for o in (channel_offsets or [0] * original_audio.shape[1])]
     
     # Start with a copy of original audio
     result = original_audio.copy()

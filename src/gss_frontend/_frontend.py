@@ -25,6 +25,7 @@ Requires:
 import math
 import logging
 import contextlib
+import heapq
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
@@ -289,7 +290,7 @@ def _partition_segments_by_duration(
 
     # Initialize groups with (total_duration, group_id, [segment_indices])
     # Use heap to efficiently find the group with smallest duration
-    groups = [
+    groups: List[Tuple[float, int, List[int]]] = [
         (0.0, gid, [])
         for gid in range(num_groups)
     ]
@@ -305,7 +306,7 @@ def _partition_segments_by_duration(
         )
 
     # Extract result in group order
-    result = [None] * num_groups
+    result: List[Optional[List[int]]] = [None] * num_groups
     for _, gid, seg_list in groups:
         result[gid] = seg_list
 
@@ -776,17 +777,17 @@ def _load_audio_channels(
 
     if isinstance(audio_path, str):
         audio_t, sample_rate = torchaudio.load(audio_path)
-        channels = [ch.numpy().astype(np.float32) for ch in audio_t]
-        channels = _match_channel_lengths(channels, channel_length_mode)
+        channels_list = [ch.numpy().astype(np.float32) for ch in audio_t]
+        channels_list = _match_channel_lengths(channels_list, channel_length_mode)
         if channel_offsets is not None:
-            channels = _apply_channel_offsets(
-                channels=channels,
+            channels_list = _apply_channel_offsets(
+                channels=channels_list,
                 channel_offsets=channel_offsets,
                 sample_rate=int(sample_rate),
                 channel_offset_unit=channel_offset_unit,
             )
-            channels = _match_channel_lengths(channels, channel_length_mode)
-        return np.stack(channels, axis=0), int(sample_rate)
+            channels_list = _match_channel_lengths(channels_list, channel_length_mode)
+        return np.stack(channels_list, axis=0), int(sample_rate)
 
     if not isinstance(audio_path, Sequence) or isinstance(audio_path, (bytes, bytearray)):
         raise TypeError("audio_path must be str or a sequence of file paths.")
@@ -796,37 +797,37 @@ def _load_audio_channels(
         raise ValueError("audio_path sequence must not be empty.")
 
     channels: List[np.ndarray] = []
-    sample_rate: Optional[int] = None
+    sample_rate_val: Optional[int] = None
 
     for path in paths:
         if not isinstance(path, str):
             raise TypeError("audio_path entries must be file path strings.")
         wav_t, sr = torchaudio.load(path)
         wav = wav_t.numpy().astype(np.float32)
-        if sample_rate is None:
-            sample_rate = int(sr)
-        elif int(sr) != sample_rate:
+        if sample_rate_val is None:
+            sample_rate_val = int(sr)
+        elif int(sr) != sample_rate_val:
             raise ValueError(
                 f"All audio files must have the same sample rate. "
-                f"Expected {sample_rate}, got {int(sr)} for '{path}'."
+                f"Expected {sample_rate_val}, got {int(sr)} for '{path}'."
             )
         for ch in wav:
             channels.append(ch)
 
-    assert sample_rate is not None
+    assert sample_rate_val is not None
 
     channels = _match_channel_lengths(channels, channel_length_mode)
     if channel_offsets is not None:
         channels = _apply_channel_offsets(
             channels=channels,
             channel_offsets=channel_offsets,
-            sample_rate=sample_rate,
+            sample_rate=sample_rate_val,
             channel_offset_unit=channel_offset_unit,
         )
         channels = _match_channel_lengths(channels, channel_length_mode)
 
     audio = np.stack(channels, axis=0).astype(np.float32)
-    return audio, sample_rate
+    return audio, sample_rate_val
 
 
 def _build_activity_from_diarization(

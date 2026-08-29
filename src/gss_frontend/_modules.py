@@ -527,6 +527,7 @@ class ParametricMultichannelWienerFilter(torch.nn.Module):
         self.psd = torchaudio.transforms.PSD()
         self.ref_channel = ref_channel
         self.is_mimo = ref_channel is None
+        self.ref_estimator: Optional[ReferenceChannelEstimatorSNR] = None
 
         if self.ref_channel == "max_snr":
             self.ref_estimator = ReferenceChannelEstimatorSNR(
@@ -536,8 +537,6 @@ class ParametricMultichannelWienerFilter(torch.nn.Module):
                 num_subbands=num_subbands,
                 eps=eps,
             )
-        else:
-            self.ref_estimator = None
 
     @staticmethod
     def trace(x: torch.Tensor, keepdim: bool = False) -> torch.Tensor:
