@@ -1104,7 +1104,7 @@ class GSS:
                 return result.detach().cpu().numpy()
         return result
 
-    def estimate_unguided_sources(
+    def estimate_unguided(
         self,
         audio: Union[np.ndarray, torch.Tensor],
         num_sources: int,
