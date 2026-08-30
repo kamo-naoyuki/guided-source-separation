@@ -26,7 +26,7 @@ Extracted from:
 """
 
 import logging
-from typing import Optional, Tuple
+from typing import Dict, Optional, Tuple, Union
 
 import torch
 import torchaudio
@@ -218,18 +218,44 @@ class MaskEstimatorGSS(torch.nn.Module):
 
         L, Q = torch.linalg.eigh(BM)
         L = torch.clamp(L.real, min=self.eps)
-        L = L / (torch.max(L, dim=-1, keepdim=True)[0] + self.eps)
-        L = L + self.eps
+        L_normalized = L / (torch.max(L, dim=-1, keepdim=True)[0] + self.eps)
+        L_normalized = L_normalized + self.eps
 
-        log_detBM = torch.sum(torch.log(L), dim=-1)
+        log_detBM = torch.sum(torch.log(L_normalized), dim=-1)
 
-        zH_invBM_z = torch.einsum("bmfj,bmfkj,bkft->bmftj", (1 / L.sqrt()).to(Q.dtype), Q.conj(), z)
+        zH_invBM_z = torch.einsum("bmfj,bmfkj,bkft->bmftj", (1 / L_normalized.sqrt()).to(Q.dtype), Q.conj(), z)
         zH_invBM_z = zH_invBM_z.abs().pow(2).sum(-1) + self.eps
 
         log_pdf = -num_inputs * torch.log(zH_invBM_z) - log_detBM[..., None]
-        return log_pdf, zH_invBM_z
+        return log_pdf, zH_invBM_z, L
 
-    def forward(self, input: torch.Tensor, activity: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, 
+        input: torch.Tensor, 
+        activity: torch.Tensor,
+        return_dict: bool = False,
+    ) -> Union[torch.Tensor, Dict[str, torch.Tensor]]:
+        """Estimate masks using cACGMM with EM algorithm.
+
+        Parameters
+        ----------
+        input : torch.Tensor
+            Complex spectrogram, shape (B, num_inputs, F, T)
+        activity : torch.Tensor
+            Activity mask, shape (B, num_outputs, T)
+        return_dict : bool
+            If False (default), return masks tensor only.
+            If True, return dict with masks, eigenvalues, and mahalanobis.
+
+        Returns
+        -------
+        torch.Tensor or dict
+            If return_dict=False: (B, num_outputs, F, T) float masks in [0, 1]
+            If return_dict=True: dict with keys:
+                - 'masks': (B, num_outputs, F, T) float masks in [0, 1]
+                - 'eigenvalues': (B, num_outputs, F, num_channels) normalized eigenvalues
+                - 'mahalanobis': (B, num_outputs, F, T) squared Mahalanobis distances
+        """
         B, num_inputs, F, T = input.shape
         num_outputs = activity.size(1)
         assert activity.size(0) == B and activity.size(-1) == T
@@ -243,16 +269,24 @@ class MaskEstimatorGSS(torch.nn.Module):
             gamma = gamma.unsqueeze(2).expand(-1, -1, F, -1)
 
             zH_invBM_z = torch.ones(B, num_outputs, F, T, dtype=input.dtype, device=input.device)
+            L = None  # eigenvalues
 
             for _ in range(self.num_iterations):
                 alpha = self.update_weights(gamma)
-                log_pdf, zH_invBM_z = self.update_pdf(z, gamma, zH_invBM_z)
+                log_pdf, zH_invBM_z, L = self.update_pdf(z, gamma, zH_invBM_z)
                 gamma = self.update_masks(alpha, activity, log_pdf)
 
         if torch.any(torch.isnan(gamma)):
             raise RuntimeError("gamma contains NaNs")
 
-        return gamma
+        if return_dict:
+            return {
+                "masks": gamma,
+                "eigenvalues": L,  # (B, num_outputs, F, num_channels)
+                "mahalanobis": zH_invBM_z,  # (B, num_outputs, F, T)
+            }
+        else:
+            return gamma
 
 
 # ---------------------------------------------------------------------------
