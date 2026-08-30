@@ -6,7 +6,7 @@
 A minimal, self-contained implementation of the NeMo-based GSS (Guided Source
 Separation) front-end for speech enhancement.
 
-Extracted from the [CHiME-8 DASR NeMo baseline](https://github.com/NVIDIA-NeMo/Speech),
+Extracted from the [CHiME-8 DASR NeMo baseline](https://github.com/chimechallenge/C8DASR-Baseline-NeMo),
 `GSS` has been stripped of its batch-processing infrastructure, lhotse
 dependencies, and DataLoader boilerplate so that it can be called **one utterance
 at a time** with a straightforward numpy API.
