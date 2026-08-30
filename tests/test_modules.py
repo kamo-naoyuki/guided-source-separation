@@ -1373,7 +1373,7 @@ class TestGSSStandaloneAPIs:
         audio = rng.standard_normal((N_CHANNELS, N_SAMPLES)).astype(np.float32)
         result = frontend.enhance_unguided(audio, num_sources=N_SPEAKERS)
         
-        expected_keys = {"masks", "eigenvalues", "mahalanobis", "occupancy", 
+        expected_keys = {"audio", "masks", "eigenvalues", "mahalanobis", "occupancy", 
                          "temporal_variance", "condition_number"}
         assert set(result.keys()) == expected_keys
 
@@ -1406,7 +1406,7 @@ class TestGSSStandaloneAPIs:
         result = frontend.enhance_unguided_auto(audio)
         
         # Should return dict with expected keys
-        expected_keys = {"masks", "eigenvalues", "mahalanobis", "occupancy", 
+        expected_keys = {"audio", "masks", "eigenvalues", "mahalanobis", "occupancy", 
                          "temporal_variance", "condition_number"}
         assert set(result.keys()) == expected_keys
         
