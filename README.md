@@ -122,8 +122,81 @@ segment = frontend.enhance_segment(
 # falls back to per-stage CPU execution as a last resort):
 # enhanced = frontend.enhance_auto(audio, activity, speaker_id=0)
 
+# --- Blind Source Separation Mode (no activity guidance) ---
+# When speaker activity is unavailable, use blind BSS to separate all sources
+# with uniform activity assumption. Returns source masks and statistics for
+# external speaker/noise classification.
+
+# Basic blind BSS (simple uniform initialization):
+result = frontend.enhance_unguided(audio, num_sources=3)
+# result: dict with keys:
+#   'masks':              (num_sources, freq, frames) [0, 1]
+#   'eigenvalues':        (num_sources, freq, channels)
+#   'mahalanobis':        (num_sources, freq, frames)
+#   'occupancy':          (num_sources,) time-averaged mask
+#   'temporal_variance':  (num_sources,) mask variance over time
+#   'condition_number':   (num_sources, freq) eigenvalue condition number
+
+# Blind BSS with automatic OOM retry:
+result = frontend.enhance_unguided_auto(audio)
+# Same dict as above, but using enhance_auto() retry logic for large audio
+
+# Speaker vs. Noise Classification Strategy:
+# CACGMM clustering alone cannot distinguish speaker types, so external
+# classification is needed. Use the returned statistics:
+#   - High condition number (λ_max / λ_min):   concentrated in few dimensions → likely speech
+#   - High occupancy:                           mostly active → likely speech
+#   - High temporal_variance:                   on-off activity pattern → likely speech
+#   - Low occupancy + low variance:             consistent background → likely noise
+
 sf.write("enhanced.wav", enhanced, sr)
 ```
+
+### Blind Source Separation (Unguided Mode)
+
+When speaker activity annotations are unavailable, use **blind BSS mode** to separate all
+sources using a uniform activity assumption. The method cannot internally distinguish
+speakers from noise, so external classification based on statistical properties is recommended.
+
+```python
+# Basic blind BSS with fixed num_sources
+result = frontend.enhance_unguided(audio, num_sources=3)
+
+# Blind BSS with automatic OOM retry (recommended for large audio)
+result = frontend.enhance_unguided_auto(audio)
+
+# Both return a dict with statistical properties for post-hoc classification:
+masks = result['masks']                    # (num_sources, freq, frames)
+eigenvalues = result['eigenvalues']        # (num_sources, freq, channels)
+mahalanobis = result['mahalanobis']        # (num_sources, freq, frames)
+occupancy = result['occupancy']            # (num_sources,)
+temporal_variance = result['temporal_variance']  # (num_sources,)
+condition_number = result['condition_number']    # (num_sources, freq)
+```
+
+#### Distinguishing Speakers from Noise
+
+CACGMM clusters the time-frequency space but cannot label clusters as "speech" or "noise".
+Use the returned statistics to classify each source:
+
+| Statistic | Interpretation |
+|-----------|-----------------|
+| **condition_number** | λ_max / λ_min per frequency bin; high values (> 10) indicate concentrated subspace → likely **speech** |
+| **occupancy** | Time-averaged mask value [0, 1]; high (> 0.3) → likely **speech**; low → likely **noise** |
+| **temporal_variance** | Mask variance over time; high → on-off activation pattern → likely **speech**; low → background noise |
+
+**Example heuristic classifier**:
+```python
+# Average statistics across frequency (eigenvalues → condition_number averaged per freq)
+mean_condition = condition_number.mean(dim=1)  # (num_sources,)
+is_speech = (mean_condition > 10) & (occupancy > 0.3) & (temporal_variance > 0.01)
+
+speech_sources = [i for i in range(len(is_speech)) if is_speech[i]]
+noise_sources = [i for i in range(len(is_speech)) if not is_speech[i]]
+```
+
+See [Complex Angular Central Gaussian Mixture Model (CACGMM)](https://arxiv.org/abs/1512.08213)
+for the underlying clustering algorithm and why eigenvalue analysis reveals speech structure.
 
 Long-form file + diarization text/file workflow (via `meeteval.io.load`):
 
@@ -791,14 +864,39 @@ Same as `enhance`, but automatically retries with a finer frequency-axis split
 whenever a CUDA out-of-memory error occurs.  If all chunk sizes are exhausted,
 falls back to per-stage CPU execution (dereverb / GSS / beamforming individually).
 
-### `GSS.estimate_masks(audio, activity)`
+### `GSS.enhance_unguided(audio, num_sources, left_context=0, right_context=0, ...)`
+
+Blind source separation without speaker activity guidance. Uses uniform activity
+assumption across all sources, making it suitable when diarization is unavailable.
+
+- **`audio`** — `(channels, samples)` float32 `numpy.ndarray` or `torch.Tensor`
+- **`num_sources`** — number of sources to separate (default: `num_channels + 1`)
+- **Returns** — dict with keys:
+  - `'masks'`: time-frequency masks `(num_sources, freq, frames)` in [0, 1]
+  - `'eigenvalues'`: covariance eigenvalues `(num_sources, freq, channels)` for condition number computation
+  - `'mahalanobis'`: Mahalanobis distances `(num_sources, freq, frames)`
+  - `'occupancy'`: time-averaged mask per source `(num_sources,)`
+  - `'temporal_variance'`: per-source mask variance over time `(num_sources,)`
+  - `'condition_number'`: eigenvalue condition number λ_max/λ_min `(num_sources, freq)`
+
+Use statistics (especially `condition_number`, `occupancy`, `temporal_variance`)
+to classify speech vs. noise via external heuristics.
+
+### `GSS.enhance_unguided_auto(audio, ...)`
+
+Same as `enhance_unguided`, but uses the OOM retry logic from `enhance_auto`.
+Automatically falls back to per-stage CPU execution if CUDA memory is exhausted.
+Recommended for large audio files.
+
+### `GSS.estimate_masks(audio, activity, garbage_class=None)`
 
 Estimate time-frequency masks via GSS (cACGMM EM).
 
 - **`audio`** — `(channels, samples)` float32 `numpy.ndarray` or `torch.Tensor`
 - **`activity`** — `(speakers, samples)` `numpy.ndarray` or `torch.Tensor`; binary {0,1} or soft [0,1]
+- **`garbage_class`** — bool or None; if None, uses `self.garbage_class` (default: True)
 - **Returns** `(classes, freq, frames)` same type as `audio`, values in [0, 1]
-- `classes = speakers + 1` when `garbage_class=True` (default), else `classes = speakers`
+- `classes = speakers + 1` when `garbage_class=True`, else `classes = speakers`
 - When `audio` is a `torch.Tensor`, gradients are preserved (training-friendly)
 
 ### Building-block modules
