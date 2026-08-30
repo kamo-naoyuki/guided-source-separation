@@ -1365,14 +1365,13 @@ class TestGSSStandaloneAPIs:
         masks = frontend.estimate_masks(audio, activity)
         assert not np.any(np.isnan(masks))
 
-    # --- enhance_unguided (wrapper functions for blind BSS) ---
+    # --- enhance_unguided (method) ---
 
     def test_enhance_unguided_output_keys(self, frontend):
         """Test that enhance_unguided returns all expected keys."""
-        from gss_frontend import enhance_unguided
         rng = np.random.default_rng(42)
         audio = rng.standard_normal((N_CHANNELS, N_SAMPLES)).astype(np.float32)
-        result = enhance_unguided(frontend, audio, num_sources=N_SPEAKERS)
+        result = frontend.enhance_unguided(audio, num_sources=N_SPEAKERS)
         
         expected_keys = {"masks", "eigenvalues", "mahalanobis", "occupancy", 
                          "temporal_variance", "condition_number"}
@@ -1380,10 +1379,9 @@ class TestGSSStandaloneAPIs:
 
     def test_enhance_unguided_masks_shape(self, frontend):
         """Test that masks have correct shape: (num_sources, freq, frames)."""
-        from gss_frontend import enhance_unguided
         rng = np.random.default_rng(42)
         audio = rng.standard_normal((N_CHANNELS, N_SAMPLES)).astype(np.float32)
-        result = enhance_unguided(frontend, audio, num_sources=N_SPEAKERS)
+        result = frontend.enhance_unguided(audio, num_sources=N_SPEAKERS)
         masks = result["masks"]
         F = FFT_LENGTH // 2 + 1
         
@@ -1393,21 +1391,19 @@ class TestGSSStandaloneAPIs:
 
     def test_enhance_unguided_masks_in_range(self, frontend):
         """Test that masks are in [0, 1]."""
-        from gss_frontend import enhance_unguided
         rng = np.random.default_rng(42)
         audio = rng.standard_normal((N_CHANNELS, N_SAMPLES)).astype(np.float32)
-        result = enhance_unguided(frontend, audio, num_sources=N_SPEAKERS)
+        result = frontend.enhance_unguided(audio, num_sources=N_SPEAKERS)
         masks = result["masks"]
         
         assert masks.min() >= 0.0
         assert masks.max() <= 1.0 + 1e-6
 
     def test_enhance_unguided_auto(self, frontend):
-        """Test enhance_unguided_auto function."""
-        from gss_frontend import enhance_unguided_auto
+        """Test enhance_unguided_auto method."""
         rng = np.random.default_rng(42)
         audio = rng.standard_normal((N_CHANNELS, N_SAMPLES)).astype(np.float32)
-        result = enhance_unguided_auto(frontend, audio)
+        result = frontend.enhance_unguided_auto(audio)
         
         # Should return dict with expected keys
         expected_keys = {"masks", "eigenvalues", "mahalanobis", "occupancy", 
