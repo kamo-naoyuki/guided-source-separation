@@ -165,7 +165,8 @@ result = frontend.enhance_unguided(audio, num_sources=3)
 # Blind BSS with automatic OOM retry (recommended for large audio)
 result = frontend.enhance_unguided_auto(audio)
 
-# Both return a dict with statistical properties for post-hoc classification:
+# Both return a dict with enhanced audio and statistical properties:
+audio_separated = result['audio']          # separated audio (num_sources, samples)
 masks = result['masks']                    # (num_sources, freq, frames)
 eigenvalues = result['eigenvalues']        # (num_sources, freq, channels)
 mahalanobis = result['mahalanobis']        # (num_sources, freq, frames)
@@ -872,6 +873,7 @@ assumption across all sources, making it suitable when diarization is unavailabl
 - **`audio`** — `(channels, samples)` float32 `numpy.ndarray` or `torch.Tensor`
 - **`num_sources`** — number of sources to separate (default: `num_channels + 1`)
 - **Returns** — dict with keys:
+  - `'audio'`: separated audio `(num_sources, samples)` same type as input
   - `'masks'`: time-frequency masks `(num_sources, freq, frames)` in [0, 1]
   - `'eigenvalues'`: covariance eigenvalues `(num_sources, freq, channels)` for condition number computation
   - `'mahalanobis'`: Mahalanobis distances `(num_sources, freq, frames)`
@@ -887,6 +889,9 @@ to classify speech vs. noise via external heuristics.
 Same as `enhance_unguided`, but uses the OOM retry logic from `enhance_auto`.
 Automatically falls back to per-stage CPU execution if CUDA memory is exhausted.
 Recommended for large audio files.
+
+Returns dict with same keys as `enhance_unguided()`: `'audio'`, `'masks'`, 
+`'eigenvalues'`, `'mahalanobis'`, `'occupancy'`, `'temporal_variance'`, `'condition_number'`.
 
 ### `GSS.estimate_masks(audio, activity, garbage_class=None)`
 

@@ -1362,9 +1362,8 @@ class GSS:
             garbage_class=False,
         )
         
-        # Remove 'audio' key since blind mode doesn't enhance specific speakers
-        result_dict = {k: v for k, v in result.items() if k != 'audio'}
-        return result_dict
+        # Return full result dict including enhanced audio and statistics
+        return result
 
     def enhance_unguided_auto(
         self,
@@ -1418,9 +1417,8 @@ class GSS:
             garbage_class=False,
         )
         
-        # Remove 'audio' key since blind mode doesn't enhance specific speakers
-        result_dict = {k: v for k, v in result.items() if k != 'audio'}
-        return result_dict
+        # Return full result dict including enhanced audio and statistics
+        return result
 
     def enhance_segment(
         self,
