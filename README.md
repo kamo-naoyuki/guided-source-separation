@@ -170,7 +170,7 @@ speech_sources = [i for i in range(len(is_speech)) if is_speech[i]]
 noise_sources = [i for i in range(len(is_speech)) if not is_speech[i]]
 ```
 
-See [Complex Angular Central Gaussian Mixture Model (CACGMM)](https://arxiv.org/abs/1512.08213)
+See [Complex Angular Central Gaussian Mixture Model (CACGMM)](https://ieeexplore.ieee.org/document/7760429)
 for the underlying clustering algorithm and why eigenvalue analysis reveals speech structure.
 
 Long-form file + diarization text/file workflow (via `meeteval.io.load`):
