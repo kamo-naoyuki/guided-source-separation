@@ -1159,7 +1159,9 @@ class GSS:
         speaker_id: int,
         left_context: int = 0,
         right_context: int = 0,
-    ) -> Union[np.ndarray, torch.Tensor]:
+        return_dict: bool = False,
+        garbage_class: Optional[bool] = None,
+    ) -> Union[np.ndarray, torch.Tensor, Dict[str, torch.Tensor]]:
         """Same as :meth:`enhance` but retries with finer chunking on OOM.
 
         Returns the same type as *audio* (``np.ndarray`` or ``torch.Tensor``).
@@ -1194,6 +1196,8 @@ class GSS:
                         left_context_frames=left_context_frames,
                         right_context_frames=right_context_frames,
                         num_chunks=num_chunks,
+                        return_dict=return_dict,
+                        garbage_class=garbage_class,
                     )
                 break  # success
             except (RuntimeError, decimal.InvalidOperation) as exc:
@@ -1226,6 +1230,25 @@ class GSS:
                 if is_numpy:
                     return result.detach().cpu().numpy()
                 return result
+
+        # Handle return_dict case - return early without context dropping on audio
+        if return_dict:
+            audio_output = result['audio']
+            if audio_output.dim() == 1:
+                # Single-channel mode: (samples,)
+                audio_output = audio_output[left_context:]
+                if right_context > 0:
+                    audio_output = audio_output[:-right_context]
+            else:
+                # MIMO mode: (num_channels, samples)
+                audio_output = audio_output[:, left_context:]
+                if right_context > 0:
+                    audio_output = audio_output[:, :-right_context]
+            result['audio'] = audio_output
+            if is_numpy:
+                # Convert audio to numpy but keep stats as torch tensors
+                result['audio'] = audio_output.detach().cpu().numpy() if torch.is_tensor(audio_output) else audio_output
+            return result
 
         # Drop context from time domain - handle both STANDARD and MIMO modes
         if result.dim() == 1:
@@ -1346,18 +1369,22 @@ class GSS:
     def enhance_unguided_auto(
         self,
         audio: Union[np.ndarray, torch.Tensor],
+        speaker_id: int = 0,
         left_context: int = 0,
         right_context: int = 0,
     ) -> Dict[str, torch.Tensor]:
-        """Enhance multi-channel audio with automatic source detection.
+        """Blind source separation using enhance_auto() with OOM-aware chunking.
 
-        Similar to enhance_unguided() but with automatic num_sources estimation
-        (uses a simple heuristic based on number of channels).
+        Performs blind source separation using uniform activity assumption, 
+        with automatic out-of-memory handling via enhance_auto()'s retry logic.
 
         Parameters
         ----------
         audio : np.ndarray or torch.Tensor, shape (channels, samples)
             Multi-channel waveform (float32 recommended).
+        speaker_id : int
+            Dummy speaker index (default 0). Not used for blind BSS but required 
+            by enhance_auto() interface.
         left_context : int
             Number of leading samples that are context (will be dropped).
         right_context : int
@@ -1365,7 +1392,7 @@ class GSS:
 
         Returns
         -------
-        dict with keys (same as enhance_unguided):
+        dict with keys:
             - 'masks': (num_sources, freq, frames) source masks [0, 1]
             - 'eigenvalues': (num_sources, freq, num_channels) eigenvalue statistics
             - 'mahalanobis': (num_sources, freq, frames) Mahalanobis distances
@@ -1373,16 +1400,27 @@ class GSS:
             - 'temporal_variance': (num_sources,) temporal variance per source
             - 'condition_number': (num_sources, freq) eigenvalue ratio per freq
         """
-        # Auto-detect num_sources: use num_channels + 1 as a simple heuristic
+        num_samples = audio.shape[-1]
         num_channels = audio.shape[0]
         num_sources = num_channels + 1
         
-        return self.enhance_unguided(
+        # Create uniform activity for all sources
+        activity = np.ones((num_sources, num_samples), dtype=np.float32) / num_sources
+        
+        # Use enhance_auto() for OOM-aware chunking with uniform activity and garbage_class=False
+        result = self.enhance_auto(
             audio=audio,
-            num_sources=num_sources,
+            activity=activity,
+            speaker_id=speaker_id,
             left_context=left_context,
             right_context=right_context,
+            return_dict=True,
+            garbage_class=False,
         )
+        
+        # Remove 'audio' key since blind mode doesn't enhance specific speakers
+        result_dict = {k: v for k, v in result.items() if k != 'audio'}
+        return result_dict
 
     def enhance_segment(
         self,
