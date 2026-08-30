@@ -26,7 +26,7 @@ import math
 import logging
 import contextlib
 import heapq
-from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Union, cast
 
 import numpy as np
 import torch
@@ -1093,9 +1093,11 @@ class GSS:
                 garbage_class=use_garbage_class,
             )
             
+            stats_dict: Optional[Dict[str, Any]] = None
             if return_dict:
-                result = enhance_result['audio']
-                stats = enhance_result
+                assert isinstance(enhance_result, dict), "enhance_result must be dict when return_dict=True"
+                stats_dict = cast(Dict[str, Any], enhance_result)
+                result = stats_dict['audio']
             else:
                 result = enhance_result
 
@@ -1105,8 +1107,9 @@ class GSS:
         if is_multi_speaker:
             # Multiple speakers: list of tensors
             # Each tensor is either (samples,) in single-channel mode or (num_channels, samples) in MIMO mode
-            result_trimmed = []
-            for output in result:
+            result_list = cast(List[Any], result)
+            result_trimmed: List[Any] = []
+            for output in result_list:
                 if output.dim() == 1:
                     # Single-channel mode: (samples,)
                     trimmed = output[left_context:]
@@ -1121,34 +1124,38 @@ class GSS:
             result = result_trimmed
         else:
             # Single speaker
-            if result.dim() == 1:
+            result_tensor = cast(torch.Tensor, result)
+            if result_tensor.dim() == 1:
                 # Single-channel mode: (samples,)
-                result = result[left_context:]
+                result = result_tensor[left_context:]
                 if right_context > 0:
                     result = result[:-right_context]
             else:
                 # MIMO mode: (num_channels, samples)
-                result = result[:, left_context:]
+                result = result_tensor[:, left_context:]
                 if right_context > 0:
                     result = result[:, :-right_context]
 
         if is_numpy:
             if is_multi_speaker:
                 # Convert list of tensors to list of numpy arrays
-                result = [r.detach().cpu().numpy() for r in result]
+                result_list_final = cast(List[torch.Tensor], result)
+                result = [r.detach().cpu().numpy() for r in result_list_final]
             else:
                 # Convert single tensor to numpy
-                result = result.detach().cpu().numpy()
+                result_tensor_final = cast(torch.Tensor, result)
+                result = result_tensor_final.detach().cpu().numpy()
         
         if return_dict:
+            assert stats_dict is not None, "stats_dict must be set when return_dict=True"
             return {
                 'audio': result,
-                'masks': stats['masks'],
-                'eigenvalues': stats['eigenvalues'],
-                'mahalanobis': stats['mahalanobis'],
-                'occupancy': stats['occupancy'],
-                'temporal_variance': stats['temporal_variance'],
-                'condition_number': stats['condition_number'],
+                'masks': stats_dict['masks'],
+                'eigenvalues': stats_dict['eigenvalues'],
+                'mahalanobis': stats_dict['mahalanobis'],
+                'occupancy': stats_dict['occupancy'],
+                'temporal_variance': stats_dict['temporal_variance'],
+                'condition_number': stats_dict['condition_number'],
             }
         return result
 
@@ -1363,7 +1370,7 @@ class GSS:
         )
         
         # Return full result dict including enhanced audio and statistics
-        return result
+        return cast(Dict[str, torch.Tensor], result)
 
     def enhance_unguided_auto(
         self,
@@ -1418,7 +1425,7 @@ class GSS:
         )
         
         # Return full result dict including enhanced audio and statistics
-        return result
+        return cast(Dict[str, torch.Tensor], result)
 
     def enhance_segment(
         self,
@@ -1881,7 +1888,7 @@ class GSS:
         """
         # Validate speaker_id
         is_multi_speaker = isinstance(speaker_id, list)
-        speaker_ids = speaker_id if is_multi_speaker else [speaker_id]
+        speaker_ids: List[int] = cast(List[int], speaker_id) if is_multi_speaker else [cast(int, speaker_id)]
         
         # Use provided garbage_class or default to self.garbage_class
         use_garbage_class = garbage_class if garbage_class is not None else self.garbage_class
