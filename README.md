@@ -137,7 +137,7 @@ speakers from noise, so external classification based on statistical properties 
 result = frontend.enhance_unguided(audio, num_sources=3)
 
 # Blind BSS with automatic OOM retry (recommended for large audio)
-result = frontend.enhance_unguided_auto(audio)
+result = frontend.enhance_unguided_auto(audio, num_sources=3)
 
 # Both return a dict with enhanced audio and statistical properties:
 audio_separated = result['audio']          # separated audio (num_sources, samples)
@@ -858,14 +858,16 @@ assumption across all sources, making it suitable when diarization is unavailabl
 Use statistics (especially `condition_number`, `occupancy`, `temporal_variance`)
 to classify speech vs. noise via external heuristics.
 
-### `GSS.enhance_unguided_auto(audio, ...)`
+### `GSS.enhance_unguided_auto(audio, num_sources, ...)`
 
 Same as `enhance_unguided`, but uses the OOM retry logic from `enhance_auto`.
 Automatically falls back to per-stage CPU execution if CUDA memory is exhausted.
 Recommended for large audio files.
 
-Returns dict with same keys as `enhance_unguided()`: `'audio'`, `'masks'`, 
-`'eigenvalues'`, `'mahalanobis'`, `'occupancy'`, `'temporal_variance'`, `'condition_number'`.
+- **`audio`** — `(channels, samples)` float32 `numpy.ndarray` or `torch.Tensor`
+- **`num_sources`** — number of sources to separate
+- **Returns** — dict with same keys as `enhance_unguided()`: `'audio'`, `'masks'`, 
+  `'eigenvalues'`, `'mahalanobis'`, `'occupancy'`, `'temporal_variance'`, `'condition_number'`
 
 ### `GSS.estimate_masks(audio, activity, garbage_class=None)`
 

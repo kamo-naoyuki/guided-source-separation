@@ -1403,16 +1403,15 @@ class TestGSSStandaloneAPIs:
         """Test enhance_unguided_auto method."""
         rng = np.random.default_rng(42)
         audio = rng.standard_normal((N_CHANNELS, N_SAMPLES)).astype(np.float32)
-        result = frontend.enhance_unguided_auto(audio)
+        result = frontend.enhance_unguided_auto(audio, num_sources=N_SPEAKERS)
         
         # Should return dict with expected keys
         expected_keys = {"audio", "masks", "eigenvalues", "mahalanobis", "occupancy", 
                          "temporal_variance", "condition_number"}
         assert set(result.keys()) == expected_keys
         
-        # num_sources should be auto-detected (num_channels + 1)
-        expected_num_sources = N_CHANNELS + 1
-        assert result["masks"].shape[0] == expected_num_sources
+        # num_sources should match input
+        assert result["masks"].shape[0] == N_SPEAKERS
 
 
 # ---------------------------------------------------------------------------

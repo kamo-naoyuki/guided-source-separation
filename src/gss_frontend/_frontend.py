@@ -1240,32 +1240,38 @@ class GSS:
 
         # Handle return_dict case - return early without context dropping on audio
         if return_dict:
-            audio_output = result['audio']
-            if audio_output.dim() == 1:
-                # Single-channel mode: (samples,)
-                audio_output = audio_output[left_context:]
-                if right_context > 0:
-                    audio_output = audio_output[:-right_context]
-            else:
-                # MIMO mode: (num_channels, samples)
-                audio_output = audio_output[:, left_context:]
-                if right_context > 0:
-                    audio_output = audio_output[:, :-right_context]
-            result['audio'] = audio_output
-            if is_numpy:
-                # Convert audio to numpy but keep stats as torch tensors
-                result['audio'] = audio_output.detach().cpu().numpy() if torch.is_tensor(audio_output) else audio_output
-            return result
+            # result is dict when return_dict=True
+            result_dict = cast(Dict[str, Any], result)
+            audio_output = result_dict['audio']
+            if torch.is_tensor(audio_output):
+                audio_tensor = cast(torch.Tensor, audio_output)
+                if audio_tensor.dim() == 1:
+                    # Single-channel mode: (samples,)
+                    audio_tensor = audio_tensor[left_context:]
+                    if right_context > 0:
+                        audio_tensor = audio_tensor[:-right_context]
+                else:
+                    # MIMO mode: (num_channels, samples)
+                    audio_tensor = audio_tensor[:, left_context:]
+                    if right_context > 0:
+                        audio_tensor = audio_tensor[:, :-right_context]
+                result_dict['audio'] = audio_tensor
+                if is_numpy:
+                    # Convert audio to numpy but keep stats as torch tensors
+                    result_dict['audio'] = audio_tensor.detach().cpu().numpy()
+            return result_dict
 
         # Drop context from time domain - handle both STANDARD and MIMO modes
-        if result.dim() == 1:
+        # result is tensor when return_dict=False (speaker_id is always int in enhance_auto)
+        result_tensor = cast(torch.Tensor, result)
+        if result_tensor.dim() == 1:
             # Single-channel mode: (samples,)
-            result = result[left_context:]
+            result = result_tensor[left_context:]
             if right_context > 0:
                 result = result[:-right_context]
         else:
             # MIMO mode: (num_channels, samples)
-            result = result[:, left_context:]
+            result = result_tensor[:, left_context:]
             if right_context > 0:
                 result = result[:, :-right_context]
         
@@ -1375,6 +1381,7 @@ class GSS:
     def enhance_unguided_auto(
         self,
         audio: Union[np.ndarray, torch.Tensor],
+        num_sources: int,
         speaker_id: int = 0,
         left_context: int = 0,
         right_context: int = 0,
@@ -1388,6 +1395,8 @@ class GSS:
         ----------
         audio : np.ndarray or torch.Tensor, shape (channels, samples)
             Multi-channel waveform (float32 recommended).
+        num_sources : int
+            Total number of sources (speakers + noise). Activity initialized uniformly.
         speaker_id : int
             Dummy speaker index (default 0). Not used for blind BSS but required 
             by enhance_auto() interface.
@@ -1399,6 +1408,7 @@ class GSS:
         Returns
         -------
         dict with keys:
+            - 'audio': separated audio (num_sources, samples)
             - 'masks': (num_sources, freq, frames) source masks [0, 1]
             - 'eigenvalues': (num_sources, freq, num_channels) eigenvalue statistics
             - 'mahalanobis': (num_sources, freq, frames) Mahalanobis distances
@@ -1407,8 +1417,6 @@ class GSS:
             - 'condition_number': (num_sources, freq) eigenvalue ratio per freq
         """
         num_samples = audio.shape[-1]
-        num_channels = audio.shape[0]
-        num_sources = num_channels + 1
         
         # Create uniform activity for all sources
         activity = np.ones((num_sources, num_samples), dtype=np.float32) / num_sources
