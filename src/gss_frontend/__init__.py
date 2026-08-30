@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from ._frontend import GSS, activity_time_to_timefreq
+from ._frontend import GSS, activity_time_to_timefreq, enhance_unguided, enhance_unguided_auto
 from ._modules import (
     AudioToSpectrogram,
     SpectrogramToAudio,
@@ -24,6 +24,8 @@ from ._modules import (
 __all__ = [
     "GSS",
     "activity_time_to_timefreq",
+    "enhance_unguided",
+    "enhance_unguided_auto",
     "AudioToSpectrogram",
     "SpectrogramToAudio",
     "MaskBasedDereverbWPE",

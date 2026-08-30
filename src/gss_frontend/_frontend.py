@@ -1002,7 +1002,8 @@ class GSS:
         left_context: int = 0,
         right_context: int = 0,
         num_chunks: int = 1,
-    ) -> Union[np.ndarray, torch.Tensor, List[Union[np.ndarray, torch.Tensor]]]:
+        return_dict: bool = False,
+    ) -> Union[np.ndarray, torch.Tensor, List[Union[np.ndarray, torch.Tensor]], Dict[str, torch.Tensor]]:
         """Enhance a single utterance.
 
         Supports both single speaker and multiple speakers enhancement.
@@ -1031,22 +1032,34 @@ class GSS:
         num_chunks : int
             Split the frequency axis into this many chunks to reduce peak GPU
             memory usage. Use ``auto`` or increase manually when you hit OOM.
+        return_dict : bool
+            If False (default), return enhanced audio only. If True, return dict with
+            'audio', 'masks', 'eigenvalues', 'mahalanobis', 'occupancy',
+            'temporal_variance', and 'condition_number' for external classification.
 
         Returns
         -------
-        np.ndarray or torch.Tensor
-            Enhanced waveform(s), float32. Shape depends on speaker_id and beamformer mode:
+        np.ndarray or torch.Tensor or Dict
+            If return_dict=False (default):
+                Enhanced waveform(s), float32. Shape depends on speaker_id and beamformer mode:
+                Single speaker (speaker_id is int):
+                - Single-channel mode: shape (samples_out,)
+                - Multi-channel MIMO mode: shape (num_channels, samples_out)
+                Multiple speakers (speaker_id is List[int]):
+                - Single-channel mode: shape (num_speakers, samples_out)
+                - Multi-channel MIMO mode: shape (num_speakers, num_channels, samples_out)
+                Same type as *audio*.
+                ``samples_out = len(audio[0]) - left_context - right_context``.
 
-            Single speaker (speaker_id is int):
-            - Single-channel mode: shape (samples_out,)
-            - Multi-channel MIMO mode: shape (num_channels, samples_out)
-
-            Multiple speakers (speaker_id is List[int]):
-            - Single-channel mode: shape (num_speakers, samples_out)
-            - Multi-channel MIMO mode: shape (num_speakers, num_channels, samples_out)
-
-            Same type as *audio*.
-            ``samples_out = len(audio[0]) - left_context - right_context``.
+            If return_dict=True:
+                Dict with keys:
+                - 'audio': enhanced waveform(s) (as above)
+                - 'masks': (num_sources, freq, frames) source masks [0, 1]
+                - 'eigenvalues': (num_sources, freq, num_channels) eigenvalue statistics
+                - 'mahalanobis': (num_sources, freq, frames) Mahalanobis distances
+                - 'occupancy': (num_sources,) time-averaged mask values [0, 1]
+                - 'temporal_variance': (num_sources,) temporal variance per source
+                - 'condition_number': (num_sources, freq) eigenvalue ratio per freq
         """
         audio_t, is_numpy = _prepare_audio(audio, self.device)
         activity_t = _prepare_activity(activity, self.device)
@@ -1060,14 +1073,22 @@ class GSS:
 
         ctx = torch.inference_mode() if is_numpy else contextlib.nullcontext()
         with ctx:
-            result = self._enhance_tensor(
+            # Get enhanced audio and optionally statistics
+            enhance_result = self._enhance_tensor(
                 audio_t,
                 activity_t,
                 speaker_id=speaker_id,
                 left_context_frames=left_context_frames,
                 right_context_frames=right_context_frames,
                 num_chunks=num_chunks,
+                return_dict=return_dict,
             )
+            
+            if return_dict:
+                result = enhance_result['audio']
+                stats = enhance_result
+            else:
+                result = enhance_result
 
         # Drop context from time domain
         is_multi_speaker = isinstance(speaker_id, list)
@@ -1105,93 +1126,22 @@ class GSS:
         if is_numpy:
             if is_multi_speaker:
                 # Convert list of tensors to list of numpy arrays
-                return [r.detach().cpu().numpy() for r in result]
+                result = [r.detach().cpu().numpy() for r in result]
             else:
                 # Convert single tensor to numpy
-                return result.detach().cpu().numpy()
-        return result
-
-    def estimate_unguided(
-        self,
-        audio: Union[np.ndarray, torch.Tensor],
-        num_sources: int,
-        left_context: int = 0,
-        right_context: int = 0,
-    ) -> Dict[str, torch.Tensor]:
-        """Estimate all sources (including noise) without speaker activity guidance.
-
-        Performs blind source separation using uniform activity assumption,
-        returning statistics for external classification (speech vs noise).
-
-        Parameters
-        ----------
-        audio : np.ndarray or torch.Tensor, shape (channels, samples)
-            Multi-channel waveform (float32 recommended).
-        num_sources : int
-            Total number of sources (speakers + noise). Activity initialized uniformly.
-        left_context : int
-            Number of leading samples that are context (will be dropped).
-        right_context : int
-            Number of trailing context samples (will be dropped).
-
-        Returns
-        -------
-        dict with keys:
-            - 'masks': (num_sources, freq, frames) source masks [0, 1]
-            - 'eigenvalues': (num_sources, freq, num_channels) eigenvalue statistics
-            - 'mahalanobis': (num_sources, freq, frames) Mahalanobis distances
-            - 'occupancy': (num_sources,) time-averaged mask values [0, 1]
-            - 'temporal_variance': (num_sources,) temporal variance per source
-            - 'condition_number': (num_sources, freq) eigenvalue ratio per freq
-        """
-        audio_t, _ = _prepare_audio(audio, self.device)
-        num_samples = audio_t.shape[-1]
+                result = result.detach().cpu().numpy()
         
-        # Uniform activity for all sources
-        activity = torch.ones(
-            (1, num_sources, num_samples),
-            dtype=audio_t.dtype,
-            device=audio_t.device,
-        ) / num_sources
-
-        left_context_frames = samples_to_frames(
-            left_context, self.fft_length, self.hop_length
-        )
-        right_context_frames = samples_to_frames(
-            right_context, self.fft_length, self.hop_length
-        )
-
-        with torch.inference_mode():
-            x_enc, _ = self.analysis(input=audio_t)
-            a_enc = activity_time_to_timefreq(
-                activity,
-                win_length=self.fft_length,
-                hop_length=self.hop_length,
-                aggregation=self.activity_aggregation,
-            )
-            gss_result = self.gss(x_enc, a_enc, return_dict=True)
-            masks = gss_result["masks"][0]  # (num_sources, freq, frames)
-            eigenvalues = gss_result["eigenvalues"][0]  # (num_sources, freq, channels)
-            mahalanobis = gss_result["mahalanobis"][0]  # (num_sources, freq, frames)
-
-        # Drop context frames
-        if left_context_frames > 0 or right_context_frames > 0:
-            masks = masks[:, :, left_context_frames:-right_context_frames or None]
-            mahalanobis = mahalanobis[:, :, left_context_frames:-right_context_frames or None]
-
-        # Compute statistics for classification
-        occupancy = masks.mean(dim=(1, 2))  # (num_sources,)
-        temporal_variance = masks.var(dim=(1, 2))  # (num_sources,)
-        condition_number = eigenvalues.amax(dim=-1) / (eigenvalues.amin(dim=-1) + 1e-8)
-
-        return {
-            "masks": masks,
-            "eigenvalues": eigenvalues,
-            "mahalanobis": mahalanobis,
-            "occupancy": occupancy,
-            "temporal_variance": temporal_variance,
-            "condition_number": condition_number,
-        }
+        if return_dict:
+            return {
+                'audio': result,
+                'masks': stats['masks'],
+                'eigenvalues': stats['eigenvalues'],
+                'mahalanobis': stats['mahalanobis'],
+                'occupancy': stats['occupancy'],
+                'temporal_variance': stats['temporal_variance'],
+                'condition_number': stats['condition_number'],
+            }
+        return result
 
     def enhance_auto(
         self,
@@ -1738,7 +1688,8 @@ class GSS:
         right_context_frames: int,
         num_chunks: int,
         cpu_fallback: bool = False,
-    ) -> torch.Tensor:
+        return_dict: bool = False,
+    ) -> Union[torch.Tensor, List[torch.Tensor], Dict[str, torch.Tensor]]:
         """Core enhancement logic operating on GPU tensors.
 
         Supports both single and multiple speaker enhancement.
@@ -1755,15 +1706,29 @@ class GSS:
         cpu_fallback : bool
             If True, each memory-intensive stage (dereverb, gss, mc) falls back
             to CPU on CUDA OOM instead of propagating the error.
+        return_dict : bool
+            If True, return dict with 'audio' and statistics ('masks', 'eigenvalues',
+            'mahalanobis', 'occupancy', 'temporal_variance', 'condition_number').
 
         Returns
         -------
-        torch.Tensor
-            Enhanced output, full output including context frames.
-            - Single speaker + single-channel mode: shape (samples,)
-            - Single speaker + MIMO mode: shape (num_channels, samples)
-            - Multiple speakers + single-channel mode: shape (num_speakers, samples)
-            - Multiple speakers + MIMO mode: shape (num_speakers, num_channels, samples)
+        torch.Tensor or List[torch.Tensor] or Dict
+            If return_dict=False (default):
+                Enhanced output, full output including context frames.
+                - Single speaker + single-channel mode: shape (samples,)
+                - Single speaker + MIMO mode: shape (num_channels, samples)
+                - Multiple speakers + single-channel mode: shape (num_speakers, samples)
+                - Multiple speakers + MIMO mode: shape (num_speakers, num_channels, samples)
+            
+            If return_dict=True:
+                Dict with keys:
+                - 'audio': (enhanced output as above)
+                - 'masks': (num_sources, freq, frames) source masks [0, 1]
+                - 'eigenvalues': (num_sources, freq, num_channels) eigenvalue statistics
+                - 'mahalanobis': (num_sources, freq, frames) Mahalanobis distances
+                - 'occupancy': (num_sources,) time-averaged mask values [0, 1]
+                - 'temporal_variance': (num_sources,) temporal variance per source
+                - 'condition_number': (num_sources, freq) eigenvalue ratio per freq
         """
         # Validate speaker_id
         is_multi_speaker = isinstance(speaker_id, list)
@@ -1792,6 +1757,9 @@ class GSS:
 
         # ---- Dereverberation + GSS mask estimation (per chunk) ----
         mask_chunks = []
+        eigenvalue_chunks = []
+        mahalanobis_chunks = []
+        
         for n in range(num_chunks):
             n_start = n * chunk_size
             n_end = min(F, (n + 1) * chunk_size)
@@ -1813,8 +1781,16 @@ class GSS:
                 gss_result_n = self.gss(x_enc_n, a_enc, return_dict=True)
             mask_n = gss_result_n["masks"]  # Extract masks from Dict
             mask_chunks.append(mask_n)
+            if return_dict:
+                eigenvalue_chunks.append(gss_result_n["eigenvalues"])
+                mahalanobis_chunks.append(gss_result_n["mahalanobis"])
 
         mask = torch.concatenate(mask_chunks, dim=-2)  # (1, spk, freq, frames)
+        
+        # Collect eigenvalues and mahalanobis for return_dict
+        if return_dict:
+            eigenvalues = torch.concatenate(eigenvalue_chunks, dim=-2)  # (1, spk, freq, channels)
+            mahalanobis = torch.concatenate(mahalanobis_chunks, dim=-2)  # (1, spk, freq, frames)
 
         # Zero out context frames in the mask
         mask[..., :left_context_frames] = 0
@@ -1864,6 +1840,141 @@ class GSS:
 
         # Return outputs as list for multiple speakers, single tensor for single speaker
         if is_multi_speaker:
-            return outputs  # List of tensors
+            audio_output = outputs  # List of tensors
         else:
-            return outputs[0]  # Single speaker output
+            audio_output = outputs[0]  # Single speaker output
+        
+        if return_dict:
+            # Compute statistics
+            masks = mask[0]  # (spk, freq, frames)
+            occupancy = masks.mean(dim=(1, 2))  # (spk,)
+            temporal_variance = masks.var(dim=(1, 2))  # (spk,)
+            eigenvalues_0 = eigenvalues[0]  # (spk, freq, channels)
+            condition_number = eigenvalues_0.amax(dim=-1) / (eigenvalues_0.amin(dim=-1) + 1e-8)
+            mahalanobis_0 = mahalanobis[0]  # (spk, freq, frames)
+            
+            return {
+                'audio': audio_output,
+                'masks': masks,
+                'eigenvalues': eigenvalues_0,
+                'mahalanobis': mahalanobis_0,
+                'occupancy': occupancy,
+                'temporal_variance': temporal_variance,
+                'condition_number': condition_number,
+            }
+        else:
+            return audio_output
+
+
+# =============================================================================
+# Module-level convenience functions for blind source separation
+# =============================================================================
+
+def enhance_unguided(
+    frontend: GSS,
+    audio: Union[np.ndarray, torch.Tensor],
+    num_sources: int,
+    left_context: int = 0,
+    right_context: int = 0,
+) -> Dict[str, torch.Tensor]:
+    """Enhance multi-channel audio without speaker activity guidance (blind BSS).
+
+    Performs blind source separation using uniform activity assumption across
+    all sources, returning statistics for external classification (speech vs noise).
+
+    This is a wrapper around GSS.enhance() with uniform activity initialization.
+    NOTE: garbage_class is disabled for blind BSS mode.
+
+    Parameters
+    ----------
+    frontend : GSS
+        Configured GSS instance for processing.
+    audio : np.ndarray or torch.Tensor, shape (channels, samples)
+        Multi-channel waveform (float32 recommended).
+    num_sources : int
+        Total number of sources (speakers + noise). Activity initialized uniformly.
+    left_context : int
+        Number of leading samples that are context (will be dropped).
+    right_context : int
+        Number of trailing context samples (will be dropped).
+
+    Returns
+    -------
+    dict with keys:
+        - 'masks': (num_sources, freq, frames) source masks [0, 1]
+        - 'eigenvalues': (num_sources, freq, num_channels) eigenvalue statistics
+        - 'mahalanobis': (num_sources, freq, frames) Mahalanobis distances
+        - 'occupancy': (num_sources,) time-averaged mask values [0, 1]
+        - 'temporal_variance': (num_sources,) temporal variance per source
+        - 'condition_number': (num_sources, freq) eigenvalue ratio per freq
+    """
+    num_samples = audio.shape[-1]
+    # Create uniform activity for all sources
+    activity = np.ones((num_sources, num_samples), dtype=np.float32) / num_sources
+    
+    # Temporarily disable garbage_class for blind BSS
+    orig_garbage_class = frontend.garbage_class
+    frontend.garbage_class = False
+    
+    try:
+        # Use speaker_id=0 (arbitrary choice) with return_dict=True
+        result = frontend.enhance(
+            audio=audio,
+            activity=activity,
+            speaker_id=0,
+            left_context=left_context,
+            right_context=right_context,
+            return_dict=True,
+        )
+    finally:
+        # Restore original garbage_class setting
+        frontend.garbage_class = orig_garbage_class
+    
+    # Remove 'audio' key since blind mode doesn't enhance specific speakers
+    result_dict = {k: v for k, v in result.items() if k != 'audio'}
+    return result_dict
+
+
+def enhance_unguided_auto(
+    frontend: GSS,
+    audio: Union[np.ndarray, torch.Tensor],
+    left_context: int = 0,
+    right_context: int = 0,
+) -> Dict[str, torch.Tensor]:
+    """Enhance multi-channel audio with automatic source detection.
+
+    Similar to enhance_unguided() but with automatic num_sources estimation
+    (uses a simple heuristic based on number of channels).
+
+    Parameters
+    ----------
+    frontend : GSS
+        Configured GSS instance for processing.
+    audio : np.ndarray or torch.Tensor, shape (channels, samples)
+        Multi-channel waveform (float32 recommended).
+    left_context : int
+        Number of leading samples that are context (will be dropped).
+    right_context : int
+        Number of trailing context samples (will be dropped).
+
+    Returns
+    -------
+    dict with keys (same as enhance_unguided):
+        - 'masks': (num_sources, freq, frames) source masks [0, 1]
+        - 'eigenvalues': (num_sources, freq, num_channels) eigenvalue statistics
+        - 'mahalanobis': (num_sources, freq, frames) Mahalanobis distances
+        - 'occupancy': (num_sources,) time-averaged mask values [0, 1]
+        - 'temporal_variance': (num_sources,) temporal variance per source
+        - 'condition_number': (num_sources, freq) eigenvalue ratio per freq
+    """
+    # Auto-detect num_sources: use num_channels + 1 as a simple heuristic
+    num_channels = audio.shape[0]
+    num_sources = num_channels + 1
+    
+    return enhance_unguided(
+        frontend=frontend,
+        audio=audio,
+        num_sources=num_sources,
+        left_context=left_context,
+        right_context=right_context,
+    )

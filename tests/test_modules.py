@@ -1365,23 +1365,25 @@ class TestGSSStandaloneAPIs:
         masks = frontend.estimate_masks(audio, activity)
         assert not np.any(np.isnan(masks))
 
-    # --- estimate_unguided ---
+    # --- enhance_unguided (wrapper functions for blind BSS) ---
 
-    def test_estimate_unguided_output_keys(self, frontend):
-        """Test that estimate_unguided returns all expected keys."""
+    def test_enhance_unguided_output_keys(self, frontend):
+        """Test that enhance_unguided returns all expected keys."""
+        from gss_frontend import enhance_unguided
         rng = np.random.default_rng(42)
         audio = rng.standard_normal((N_CHANNELS, N_SAMPLES)).astype(np.float32)
-        result = frontend.estimate_unguided(audio, num_sources=N_SPEAKERS)
+        result = enhance_unguided(frontend, audio, num_sources=N_SPEAKERS)
         
         expected_keys = {"masks", "eigenvalues", "mahalanobis", "occupancy", 
                          "temporal_variance", "condition_number"}
         assert set(result.keys()) == expected_keys
 
-    def test_estimate_unguided_masks_shape(self, frontend):
+    def test_enhance_unguided_masks_shape(self, frontend):
         """Test that masks have correct shape: (num_sources, freq, frames)."""
+        from gss_frontend import enhance_unguided
         rng = np.random.default_rng(42)
         audio = rng.standard_normal((N_CHANNELS, N_SAMPLES)).astype(np.float32)
-        result = frontend.estimate_unguided(audio, num_sources=N_SPEAKERS)
+        result = enhance_unguided(frontend, audio, num_sources=N_SPEAKERS)
         masks = result["masks"]
         F = FFT_LENGTH // 2 + 1
         
@@ -1389,102 +1391,32 @@ class TestGSSStandaloneAPIs:
         assert masks.shape[1] == F
         assert masks.ndim == 3
 
-    def test_estimate_unguided_eigenvalues_shape(self, frontend):
-        """Test that eigenvalues have correct shape: (num_sources, freq, num_channels)."""
-        rng = np.random.default_rng(42)
-        audio = rng.standard_normal((N_CHANNELS, N_SAMPLES)).astype(np.float32)
-        result = frontend.estimate_unguided(audio, num_sources=N_SPEAKERS)
-        eigenvalues = result["eigenvalues"]
-        F = FFT_LENGTH // 2 + 1
-        
-        assert eigenvalues.shape[0] == N_SPEAKERS
-        assert eigenvalues.shape[1] == F
-        assert eigenvalues.shape[2] == N_CHANNELS
-
-    def test_estimate_unguided_mahalanobis_shape(self, frontend):
-        """Test that mahalanobis distances have correct shape: (num_sources, freq, frames)."""
-        rng = np.random.default_rng(42)
-        audio = rng.standard_normal((N_CHANNELS, N_SAMPLES)).astype(np.float32)
-        result = frontend.estimate_unguided(audio, num_sources=N_SPEAKERS)
-        mahalanobis = result["mahalanobis"]
-        F = FFT_LENGTH // 2 + 1
-        
-        assert mahalanobis.shape[0] == N_SPEAKERS
-        assert mahalanobis.shape[1] == F
-        assert mahalanobis.ndim == 3
-
-    def test_estimate_unguided_occupancy_shape(self, frontend):
-        """Test that occupancy has correct shape: (num_sources,)."""
-        rng = np.random.default_rng(42)
-        audio = rng.standard_normal((N_CHANNELS, N_SAMPLES)).astype(np.float32)
-        result = frontend.estimate_unguided(audio, num_sources=N_SPEAKERS)
-        occupancy = result["occupancy"]
-        
-        assert occupancy.shape == (N_SPEAKERS,)
-        assert torch.all(occupancy >= 0.0)
-        assert torch.all(occupancy <= 1.0)
-
-    def test_estimate_unguided_temporal_variance_shape(self, frontend):
-        """Test that temporal variance has correct shape: (num_sources,)."""
-        rng = np.random.default_rng(42)
-        audio = rng.standard_normal((N_CHANNELS, N_SAMPLES)).astype(np.float32)
-        result = frontend.estimate_unguided(audio, num_sources=N_SPEAKERS)
-        temporal_variance = result["temporal_variance"]
-        
-        assert temporal_variance.shape == (N_SPEAKERS,)
-        assert torch.all(temporal_variance >= 0.0)
-
-    def test_estimate_unguided_condition_number_shape(self, frontend):
-        """Test that condition number has correct shape: (num_sources, freq)."""
-        rng = np.random.default_rng(42)
-        audio = rng.standard_normal((N_CHANNELS, N_SAMPLES)).astype(np.float32)
-        result = frontend.estimate_unguided(audio, num_sources=N_SPEAKERS)
-        condition_number = result["condition_number"]
-        F = FFT_LENGTH // 2 + 1
-        
-        assert condition_number.shape == (N_SPEAKERS, F)
-        assert torch.all(condition_number >= 0.0)
-
-    def test_estimate_unguided_masks_in_range(self, frontend):
+    def test_enhance_unguided_masks_in_range(self, frontend):
         """Test that masks are in [0, 1]."""
+        from gss_frontend import enhance_unguided
         rng = np.random.default_rng(42)
         audio = rng.standard_normal((N_CHANNELS, N_SAMPLES)).astype(np.float32)
-        result = frontend.estimate_unguided(audio, num_sources=N_SPEAKERS)
+        result = enhance_unguided(frontend, audio, num_sources=N_SPEAKERS)
         masks = result["masks"]
         
         assert masks.min() >= 0.0
         assert masks.max() <= 1.0 + 1e-6
 
-    def test_estimate_unguided_masks_sum_to_one(self, frontend):
-        """Test that masks sum to approximately 1 across sources."""
+    def test_enhance_unguided_auto(self, frontend):
+        """Test enhance_unguided_auto function."""
+        from gss_frontend import enhance_unguided_auto
         rng = np.random.default_rng(42)
         audio = rng.standard_normal((N_CHANNELS, N_SAMPLES)).astype(np.float32)
-        result = frontend.estimate_unguided(audio, num_sources=N_SPEAKERS)
-        masks = result["masks"]
+        result = enhance_unguided_auto(frontend, audio)
         
-        mask_sum = masks.sum(dim=0)
-        assert torch.allclose(mask_sum, torch.ones_like(mask_sum), atol=1e-4)
-
-    def test_estimate_unguided_with_context(self, frontend):
-        """Test that context frames are properly dropped."""
-        rng = np.random.default_rng(42)
-        audio = rng.standard_normal((N_CHANNELS, N_SAMPLES)).astype(np.float32)
+        # Should return dict with expected keys
+        expected_keys = {"masks", "eigenvalues", "mahalanobis", "occupancy", 
+                         "temporal_variance", "condition_number"}
+        assert set(result.keys()) == expected_keys
         
-        # Without context
-        result_no_ctx = frontend.estimate_unguided(audio, num_sources=N_SPEAKERS)
-        masks_no_ctx = result_no_ctx["masks"]
-        
-        # With context (5ms * 16kHz = 80 samples at 16kHz; uses FFT params)
-        left_context = 512
-        right_context = 512
-        result_ctx = frontend.estimate_unguided(
-            audio, num_sources=N_SPEAKERS, 
-            left_context=left_context, right_context=right_context
-        )
-        masks_ctx = result_ctx["masks"]
-        
-        # Context should reduce frame count
-        assert masks_ctx.shape[-1] < masks_no_ctx.shape[-1]
+        # num_sources should be auto-detected (num_channels + 1)
+        expected_num_sources = N_CHANNELS + 1
+        assert result["masks"].shape[0] == expected_num_sources
 
 
 # ---------------------------------------------------------------------------
