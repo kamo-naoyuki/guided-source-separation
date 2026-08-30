@@ -915,6 +915,11 @@ class GSS:
     activity_aggregation : str
         How to aggregate sample-level activity into frame-level activity.
         One of ``'mean'`` (default), ``'max'``, or ``'any'``.
+    garbage_class : bool
+        If True (default), append one extra background/garbage activity class
+        so GSS runs with ``n_speakers + 1`` classes when using enhance() or estimate_masks().
+        This option does NOT apply to estimate_unguided(), which always uses exactly
+        num_sources classes without garbage class.
     use_dtype : torch.dtype
         Complex dtype used internally (default ``torch.cfloat``).
     device : str or torch.device
@@ -937,6 +942,7 @@ class GSS:
         mc_ref_channel: str = "max_snr",
         mc_mask_min_db: float = -200,
         mc_postmask_min_db: float = 0,
+        garbage_class: bool = True,
         activity_aggregation: str = "mean",
         use_dtype: torch.dtype = torch.cfloat,
         device: str = "cuda",
@@ -951,6 +957,7 @@ class GSS:
                 "Use one of: 'mean', 'max', 'any'."
             )
         self.activity_aggregation = activity_aggregation
+        self.garbage_class = garbage_class
 
         self.analysis = AudioToSpectrogram(
             fft_length=stft_fft_length, hop_length=stft_hop_length
@@ -1292,14 +1299,19 @@ class GSS:
             output is also a ``torch.Tensor`` (useful for training).
         activity : np.ndarray or torch.Tensor, shape (speakers, samples)
             Speaker activity, binary {0, 1} or soft confidences in [0, 1].
+            When ``self.garbage_class=True``, one extra always-active class is
+            appended internally.
 
         Returns
         -------
         np.ndarray or torch.Tensor, shape (speakers, freq, frames)
             Soft time-frequency masks, values in [0, 1].  Same type as *audio*.
+            ``shape = (speakers + 1, freq, frames)`` when ``self.garbage_class=True``,
+            else ``(speakers, freq, frames)``.
         """
         audio_t, is_numpy = _prepare_audio(audio, self.device)
         activity_t = _prepare_activity(activity, self.device)
+        activity_t = _append_garbage_activity_class(activity_t, self.garbage_class)
         ctx = torch.inference_mode() if is_numpy else contextlib.nullcontext()
         with ctx:
             x_enc, _ = self.analysis(input=audio_t)        # (1, ch, freq, frames)
@@ -1757,6 +1769,8 @@ class GSS:
         is_multi_speaker = isinstance(speaker_id, list)
         speaker_ids = speaker_id if is_multi_speaker else [speaker_id]
         
+        # Add garbage class if enabled
+        activity = _append_garbage_activity_class(activity, self.garbage_class)
         num_speakers_activity = activity.size(1)
         for sid in speaker_ids:
             if not isinstance(sid, int) or sid < 0 or sid >= num_speakers_activity:

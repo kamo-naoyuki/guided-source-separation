@@ -1328,7 +1328,7 @@ class TestGSSStandaloneAPIs:
         audio, activity = self._make_inputs()
         masks = frontend.estimate_masks(audio, activity)
         F = FFT_LENGTH // 2 + 1
-        assert masks.shape[0] == N_SPEAKERS
+        assert masks.shape[0] == N_SPEAKERS + 1  # +1 for garbage_class (default=True)
         assert masks.shape[1] == F
         assert masks.ndim == 3
 
@@ -1341,11 +1341,12 @@ class TestGSSStandaloneAPIs:
             bss_iterations=2,
             mc_ref_channel=0,
             use_dtype=torch.cfloat,
+            garbage_class=False,
             device="cpu",
         )
         audio, activity = self._make_inputs()
         masks = frontend.estimate_masks(audio, activity)
-        assert masks.shape[0] == N_SPEAKERS
+        assert masks.shape[0] == N_SPEAKERS  # No garbage class
 
     def test_estimate_masks_range(self, frontend):
         audio, activity = self._make_inputs()
