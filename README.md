@@ -60,6 +60,7 @@ pip install -e ".[diarization]"
 
 ## Usage
 
+### Guided Enhancement
 
 ```python
 import numpy as np
@@ -152,7 +153,7 @@ result = frontend.enhance_unguided_auto(audio)
 sf.write("enhanced.wav", enhanced, sr)
 ```
 
-### Blind Source Separation (Unguided Mode)
+### Blind Source Separation
 
 When speaker activity annotations are unavailable, use **blind BSS mode** to separate all
 sources using a uniform activity assumption. The method cannot internally distinguish
