@@ -123,33 +123,6 @@ segment = frontend.enhance_segment(
 # falls back to per-stage CPU execution as a last resort):
 # enhanced = frontend.enhance_auto(audio, activity, speaker_id=0)
 
-# --- Blind Source Separation Mode (no activity guidance) ---
-# When speaker activity is unavailable, use blind BSS to separate all sources
-# with uniform activity assumption. Returns source masks and statistics for
-# external speaker/noise classification.
-
-# Basic blind BSS (simple uniform initialization):
-result = frontend.enhance_unguided(audio, num_sources=3)
-# result: dict with keys:
-#   'masks':              (num_sources, freq, frames) [0, 1]
-#   'eigenvalues':        (num_sources, freq, channels)
-#   'mahalanobis':        (num_sources, freq, frames)
-#   'occupancy':          (num_sources,) time-averaged mask
-#   'temporal_variance':  (num_sources,) mask variance over time
-#   'condition_number':   (num_sources, freq) eigenvalue condition number
-
-# Blind BSS with automatic OOM retry:
-result = frontend.enhance_unguided_auto(audio)
-# Same dict as above, but using enhance_auto() retry logic for large audio
-
-# Speaker vs. Noise Classification Strategy:
-# CACGMM clustering alone cannot distinguish speaker types, so external
-# classification is needed. Use the returned statistics:
-#   - High condition number (λ_max / λ_min):   concentrated in few dimensions → likely speech
-#   - High occupancy:                           mostly active → likely speech
-#   - High temporal_variance:                   on-off activity pattern → likely speech
-#   - Low occupancy + low variance:             consistent background → likely noise
-
 sf.write("enhanced.wav", enhanced, sr)
 ```
 
