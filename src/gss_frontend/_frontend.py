@@ -22,10 +22,10 @@ Requires:
     torch, torchaudio, numpy, soundfile
 """
 
-import math
-import logging
 import contextlib
 import heapq
+import logging
+import math
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union, cast
 
 import numpy as np
@@ -33,10 +33,10 @@ import torch
 
 from ._modules import (
     AudioToSpectrogram,
-    SpectrogramToAudio,
     MaskBasedBeamformer,
     MaskBasedDereverbWPE,
     MaskEstimatorGSS,
+    SpectrogramToAudio,
 )
 
 logger = logging.getLogger(__name__)
@@ -45,6 +45,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Helper functions
 # ---------------------------------------------------------------------------
+
 
 def samples_to_frames(samples: int, fft_length: int, hop_length: int) -> int:
     """Convert number of audio samples to STFT frame count."""
@@ -78,9 +79,7 @@ def activity_time_to_timefreq(
         a_time.unsqueeze(-1),
         pad=(0, 0, win_length // 2, win_length // 2),
     )
-    a_tf = torch.nn.functional.unfold(
-        a_tf, kernel_size=(win_length, 1), stride=(hop_length, 1)
-    )
+    a_tf = torch.nn.functional.unfold(a_tf, kernel_size=(win_length, 1), stride=(hop_length, 1))
     a_tf = a_tf.reshape(a_time.size(0), a_time.size(1), win_length, -1)
     a_tf = a_tf.clamp(min=0.0)
     if aggregation == "mean":
@@ -162,7 +161,9 @@ def _try_gpu_else_cpu(module: torch.nn.Module, *args, **kwargs):
         result = module(*cpu_args, **cpu_kwargs)
         if device is not None:
             if isinstance(result, (tuple, list)):
-                return type(result)(r.to(device) if isinstance(r, torch.Tensor) else r for r in result)
+                return type(result)(
+                    r.to(device) if isinstance(r, torch.Tensor) else r for r in result
+                )
             if isinstance(result, torch.Tensor):
                 return result.to(device)
         return result
@@ -231,9 +232,7 @@ def _validate_segment_mode(mode: str) -> str:
 
     valid_modes = ("standard", "oom_fallback")
     if mode not in valid_modes:
-        raise ValueError(
-            f"mode must be one of {valid_modes}, got '{mode}'."
-        )
+        raise ValueError(f"mode must be one of {valid_modes}, got '{mode}'.")
     return mode
 
 
@@ -276,10 +275,7 @@ def _partition_segments_by_duration(
         return [list(range(len(segments)))]
 
     # Compute duration for each segment
-    durations = [
-        seg["end"] - seg["start"]
-        for seg in segments
-    ]
+    durations = [seg["end"] - seg["start"] for seg in segments]
 
     # Sort segment indices by descending duration
     sorted_indices = sorted(
@@ -290,10 +286,7 @@ def _partition_segments_by_duration(
 
     # Initialize groups with (total_duration, group_id, [segment_indices])
     # Use heap to efficiently find the group with smallest duration
-    groups: List[Tuple[float, int, List[int]]] = [
-        (0.0, gid, [])
-        for gid in range(num_groups)
-    ]
+    groups: List[Tuple[float, int, List[int]]] = [(0.0, gid, []) for gid in range(num_groups)]
     heapq.heapify(groups)
 
     # Greedily assign each segment to the group with smallest total duration
@@ -333,10 +326,7 @@ def _compute_group_statistics(
             "avg_duration_seconds": 0.0,
         }
 
-    total_duration = sum(
-        segments[i]["end"] - segments[i]["start"]
-        for i in group_indices
-    )
+    total_duration = sum(segments[i]["end"] - segments[i]["start"] for i in group_indices)
     avg_duration = total_duration / len(group_indices)
 
     return {
@@ -448,7 +438,9 @@ def _load_diarization_segments(
         if isinstance(loaded, dict):
             for loaded_session, loaded_segments in loaded.items():
                 for segment in loaded_segments:
-                    cur_segments.append(_segment_to_dict(segment, default_session=str(loaded_session)))
+                    cur_segments.append(
+                        _segment_to_dict(segment, default_session=str(loaded_session))
+                    )
         else:
             for segment in loaded:
                 cur_segments.append(_segment_to_dict(segment))
@@ -487,9 +479,7 @@ def _load_diarization_segments(
     if not segments:
         if session_id is None:
             raise ValueError("No valid diarization segments were loaded.")
-        raise ValueError(
-            f"No valid diarization segments were found for session_id='{session_id}'."
-        )
+        raise ValueError(f"No valid diarization segments were found for session_id='{session_id}'.")
     return segments
 
 
@@ -609,8 +599,12 @@ def _load_valid_regions_arg(
             default_session = str(region_session)
             if isinstance(region_values, (list, tuple)):
                 # Either one interval tuple/list or a list of interval items.
-                if len(region_values) == 2 and not isinstance(region_values[0], (dict, list, tuple)):
-                    regions.append(_interval_to_dict(region_values, default_session=default_session))
+                if len(region_values) == 2 and not isinstance(
+                    region_values[0], (dict, list, tuple)
+                ):
+                    regions.append(
+                        _interval_to_dict(region_values, default_session=default_session)
+                    )
                 else:
                     for region in region_values:
                         regions.append(_interval_to_dict(region, default_session=default_session))
@@ -737,7 +731,9 @@ def _apply_channel_offsets(
             ch_shifted = ch
 
         if ch_shifted.ndim != 1:
-            raise ValueError(f"Invalid channel shape after offset on channel {idx}: {ch_shifted.shape}")
+            raise ValueError(
+                f"Invalid channel shape after offset on channel {idx}: {ch_shifted.shape}"
+            )
         shifted.append(ch_shifted)
     return shifted
 
@@ -864,6 +860,7 @@ def _build_activity_from_diarization(
 # Main class
 # ---------------------------------------------------------------------------
 
+
 class GSS:
     """NeMo-based GSS (Guided Source Separation) front-end.
 
@@ -975,9 +972,7 @@ class GSS:
             ).to(self.device)
         else:
             self.dereverb = None
-        self.gss = MaskEstimatorGSS(
-            num_iterations=bss_iterations, dtype=use_dtype
-        ).to(self.device)
+        self.gss = MaskEstimatorGSS(num_iterations=bss_iterations, dtype=use_dtype).to(self.device)
         self.mc = MaskBasedBeamformer(
             filter_type=mc_filter_type,
             filter_beta=mc_filter_beta,
@@ -1004,7 +999,9 @@ class GSS:
         num_chunks: int = 1,
         return_dict: bool = False,
         garbage_class: Optional[bool] = None,
-    ) -> Union[np.ndarray, torch.Tensor, List[Union[np.ndarray, torch.Tensor]], Dict[str, torch.Tensor]]:
+    ) -> Union[
+        np.ndarray, torch.Tensor, List[Union[np.ndarray, torch.Tensor]], Dict[str, torch.Tensor]
+    ]:
         """Enhance a single utterance.
 
         Supports both single speaker and multiple speakers enhancement.
@@ -1068,16 +1065,12 @@ class GSS:
         """
         audio_t, is_numpy = _prepare_audio(audio, self.device)
         activity_t = _prepare_activity(activity, self.device)
-        
+
         # Use provided garbage_class or default to self.garbage_class
         use_garbage_class = garbage_class if garbage_class is not None else self.garbage_class
 
-        left_context_frames = samples_to_frames(
-            left_context, self.fft_length, self.hop_length
-        )
-        right_context_frames = samples_to_frames(
-            right_context, self.fft_length, self.hop_length
-        )
+        left_context_frames = samples_to_frames(left_context, self.fft_length, self.hop_length)
+        right_context_frames = samples_to_frames(right_context, self.fft_length, self.hop_length)
 
         ctx = torch.inference_mode() if is_numpy else contextlib.nullcontext()
         with ctx:
@@ -1092,12 +1085,14 @@ class GSS:
                 return_dict=return_dict,
                 garbage_class=use_garbage_class,
             )
-            
+
             stats_dict: Optional[Dict[str, Any]] = None
             if return_dict:
-                assert isinstance(enhance_result, dict), "enhance_result must be dict when return_dict=True"
+                assert isinstance(
+                    enhance_result, dict
+                ), "enhance_result must be dict when return_dict=True"
                 stats_dict = cast(Dict[str, Any], enhance_result)
-                result = stats_dict['audio']
+                result = stats_dict["audio"]
             else:
                 result = enhance_result
 
@@ -1145,17 +1140,17 @@ class GSS:
                 # Convert single tensor to numpy
                 result_tensor_final = cast(torch.Tensor, result)
                 result = result_tensor_final.detach().cpu().numpy()
-        
+
         if return_dict:
             assert stats_dict is not None, "stats_dict must be set when return_dict=True"
             return {
-                'audio': result,
-                'masks': stats_dict['masks'],
-                'eigenvalues': stats_dict['eigenvalues'],
-                'mahalanobis': stats_dict['mahalanobis'],
-                'occupancy': stats_dict['occupancy'],
-                'temporal_variance': stats_dict['temporal_variance'],
-                'condition_number': stats_dict['condition_number'],
+                "audio": result,
+                "masks": stats_dict["masks"],
+                "eigenvalues": stats_dict["eigenvalues"],
+                "mahalanobis": stats_dict["mahalanobis"],
+                "occupancy": stats_dict["occupancy"],
+                "temporal_variance": stats_dict["temporal_variance"],
+                "condition_number": stats_dict["condition_number"],
             }
         return result
 
@@ -1182,12 +1177,8 @@ class GSS:
         audio_t, is_numpy = _prepare_audio(audio, self.device)
         activity_t = _prepare_activity(activity, self.device)
 
-        left_context_frames = samples_to_frames(
-            left_context, self.fft_length, self.hop_length
-        )
-        right_context_frames = samples_to_frames(
-            right_context, self.fft_length, self.hop_length
-        )
+        left_context_frames = samples_to_frames(left_context, self.fft_length, self.hop_length)
+        right_context_frames = samples_to_frames(right_context, self.fft_length, self.hop_length)
 
         num_chunks_list = _get_int_divisors(self.fft_length // 2 + 1)
 
@@ -1210,16 +1201,12 @@ class GSS:
             except (RuntimeError, decimal.InvalidOperation) as exc:
                 if isinstance(exc, RuntimeError) and not _is_cuda_oom_error(exc):
                     raise
-                logger.warning(
-                    "OOM with num_chunks=%d, retrying with more chunks.", num_chunks
-                )
+                logger.warning("OOM with num_chunks=%d, retrying with more chunks.", num_chunks)
                 torch.cuda.empty_cache()
                 continue
 
         if result is None:
-            logger.warning(
-                "All GPU chunk sizes exhausted. Retrying with per-stage CPU fallback."
-            )
+            logger.warning("All GPU chunk sizes exhausted. Retrying with per-stage CPU fallback.")
             try:
                 with ctx:
                     result = self._enhance_tensor(
@@ -1242,7 +1229,7 @@ class GSS:
         if return_dict:
             # result is dict when return_dict=True
             result_dict = cast(Dict[str, Any], result)
-            audio_output = result_dict['audio']
+            audio_output = result_dict["audio"]
             if torch.is_tensor(audio_output):
                 audio_tensor = cast(torch.Tensor, audio_output)
                 if audio_tensor.dim() == 1:
@@ -1255,10 +1242,10 @@ class GSS:
                     audio_tensor = audio_tensor[:, left_context:]
                     if right_context > 0:
                         audio_tensor = audio_tensor[:, :-right_context]
-                result_dict['audio'] = audio_tensor
+                result_dict["audio"] = audio_tensor
                 if is_numpy:
                     # Convert audio to numpy but keep stats as torch tensors
-                    result_dict['audio'] = audio_tensor.detach().cpu().numpy()
+                    result_dict["audio"] = audio_tensor.detach().cpu().numpy()
             return result_dict
 
         # Drop context from time domain - handle both STANDARD and MIMO modes
@@ -1274,7 +1261,7 @@ class GSS:
             result = result_tensor[:, left_context:]
             if right_context > 0:
                 result = result[:, :-right_context]
-        
+
         if is_numpy:
             return result.detach().cpu().numpy()
         return result
@@ -1309,20 +1296,20 @@ class GSS:
         """
         audio_t, is_numpy = _prepare_audio(audio, self.device)
         activity_t = _prepare_activity(activity, self.device)
-        
+
         # Use provided garbage_class or default to self.garbage_class
         use_garbage_class = garbage_class if garbage_class is not None else self.garbage_class
         activity_t = _append_garbage_activity_class(activity_t, use_garbage_class)
         ctx = torch.inference_mode() if is_numpy else contextlib.nullcontext()
         with ctx:
-            x_enc, _ = self.analysis(input=audio_t)        # (1, ch, freq, frames)
+            x_enc, _ = self.analysis(input=audio_t)  # (1, ch, freq, frames)
             a_enc = activity_time_to_timefreq(
                 activity_t,
                 win_length=self.fft_length,
                 hop_length=self.hop_length,
                 aggregation=self.activity_aggregation,
             )
-            masks = self.gss(x_enc, a_enc)                 # (1, spk, freq, frames) tensor
+            masks = self.gss(x_enc, a_enc)  # (1, spk, freq, frames) tensor
         if is_numpy:
             return masks[0].detach().cpu().numpy()
         return masks[0]
@@ -1363,7 +1350,7 @@ class GSS:
         num_samples = audio.shape[-1]
         # Create uniform activity for all sources
         activity = np.ones((num_sources, num_samples), dtype=np.float32) / num_sources
-        
+
         # Use speaker_id=0 (arbitrary choice) with return_dict=True, and garbage_class=False for blind BSS
         result = self.enhance(
             audio=audio,
@@ -1374,7 +1361,7 @@ class GSS:
             return_dict=True,
             garbage_class=False,
         )
-        
+
         # Return full result dict including enhanced audio and statistics
         return cast(Dict[str, torch.Tensor], result)
 
@@ -1388,7 +1375,7 @@ class GSS:
     ) -> Dict[str, torch.Tensor]:
         """Blind source separation using enhance_auto() with OOM-aware chunking.
 
-        Performs blind source separation using uniform activity assumption, 
+        Performs blind source separation using uniform activity assumption,
         with automatic out-of-memory handling via enhance_auto()'s retry logic.
 
         Parameters
@@ -1398,7 +1385,7 @@ class GSS:
         num_sources : int
             Total number of sources (speakers + noise). Activity initialized uniformly.
         speaker_id : int
-            Dummy speaker index (default 0). Not used for blind BSS but required 
+            Dummy speaker index (default 0). Not used for blind BSS but required
             by enhance_auto() interface.
         left_context : int
             Number of leading samples that are context (will be dropped).
@@ -1417,10 +1404,10 @@ class GSS:
             - 'condition_number': (num_sources, freq) eigenvalue ratio per freq
         """
         num_samples = audio.shape[-1]
-        
+
         # Create uniform activity for all sources
         activity = np.ones((num_sources, num_samples), dtype=np.float32) / num_sources
-        
+
         # Use enhance_auto() for OOM-aware chunking with uniform activity and garbage_class=False
         result = self.enhance_auto(
             audio=audio,
@@ -1431,7 +1418,7 @@ class GSS:
             return_dict=True,
             garbage_class=False,
         )
-        
+
         # Return full result dict including enhanced audio and statistics
         return cast(Dict[str, torch.Tensor], result)
 
@@ -1562,11 +1549,11 @@ class GSS:
         group_id: int = 0,
     ):
         """Enhance all diarized target-speaker utterances from a long recording.
-        
+
         Yields
         ------
         dict
-            Enhanced segment with keys: speaker, speaker_id, segment_index, 
+            Enhanced segment with keys: speaker, speaker_id, segment_index,
             segment_start, segment_end, sample_rate, enhanced_audio
 
         Parameters
@@ -1703,7 +1690,9 @@ class GSS:
                 raise TypeError("speaker_id must be int/str/sequence or None, not bool.")
             if isinstance(speaker_id, (int, str)):
                 selectors = [speaker_id]
-            elif isinstance(speaker_id, Sequence) and not isinstance(speaker_id, (bytes, bytearray)):
+            elif isinstance(speaker_id, Sequence) and not isinstance(
+                speaker_id, (bytes, bytearray)
+            ):
                 selectors = list(speaker_id)
                 if not selectors:
                     raise ValueError("speaker_id sequence must not be empty.")
@@ -1733,7 +1722,9 @@ class GSS:
             selected_indices = list(dict.fromkeys(selected_indices))
 
         selected_speakers = {speakers[idx] for idx in selected_indices}
-        target_segments = [segment for segment in segments if segment["speaker"] in selected_speakers]
+        target_segments = [
+            segment for segment in segments if segment["speaker"] in selected_speakers
+        ]
         if not target_segments:
             raise ValueError("No segments found for selected speaker(s).")
 
@@ -1741,9 +1732,7 @@ class GSS:
         if num_groups < 1:
             raise ValueError(f"num_groups must be >= 1, got {num_groups}")
         if group_id < 0 or group_id >= num_groups:
-            raise ValueError(
-                f"group_id must be in range [0, {num_groups}), got {group_id}"
-            )
+            raise ValueError(f"group_id must be in range [0, {num_groups}), got {group_id}")
 
         # Log total statistics
         total_stats = _compute_group_statistics(target_segments, list(range(len(target_segments))))
@@ -1760,7 +1749,9 @@ class GSS:
             all_groups = _partition_segments_by_duration(target_segments, num_groups)
             group_segment_indices = all_groups[group_id]
             target_segments = [target_segments[i] for i in group_segment_indices]
-            group_stats = _compute_group_statistics(target_segments, list(range(len(target_segments))))
+            group_stats = _compute_group_statistics(
+                target_segments, list(range(len(target_segments)))
+            )
             logger.info(
                 "Processing group %d/%d: %d segments, %.1f seconds (avg: %.1f s/seg)",
                 group_id + 1,
@@ -1772,7 +1763,7 @@ class GSS:
         else:
             # When not partitioning, use sequential indices
             group_segment_indices = list(range(len(target_segments)))
-        
+
         if not target_segments:
             raise ValueError("No segments in the requested group.")
 
@@ -1790,7 +1781,6 @@ class GSS:
             num_samples=num_samples,
             sample_rate=sample_rate,
         )
-
 
         for idx, segment in enumerate(target_segments):
             target_speaker = segment["speaker"]
@@ -1827,7 +1817,9 @@ class GSS:
             yield {
                 "speaker": target_speaker,
                 "speaker_id": target_idx,
-                "segment_index": group_segment_indices[idx],  # Use global index for consistent naming
+                "segment_index": group_segment_indices[
+                    idx
+                ],  # Use global index for consistent naming
                 "segment_start": segment["start"],
                 "segment_end": segment["end"],
                 "sample_rate": sample_rate,
@@ -1883,7 +1875,7 @@ class GSS:
                 - Single speaker + MIMO mode: shape (num_channels, samples)
                 - Multiple speakers + single-channel mode: shape (num_speakers, samples)
                 - Multiple speakers + MIMO mode: shape (num_speakers, num_channels, samples)
-            
+
             If return_dict=True:
                 Dict with keys:
                 - 'audio': (enhanced output as above)
@@ -1896,8 +1888,10 @@ class GSS:
         """
         # Validate speaker_id
         is_multi_speaker = isinstance(speaker_id, list)
-        speaker_ids: List[int] = cast(List[int], speaker_id) if is_multi_speaker else [cast(int, speaker_id)]
-        
+        speaker_ids: List[int] = (
+            cast(List[int], speaker_id) if is_multi_speaker else [cast(int, speaker_id)]
+        )
+
         # Use provided garbage_class or default to self.garbage_class
         use_garbage_class = garbage_class if garbage_class is not None else self.garbage_class
         # Add garbage class if enabled
@@ -1910,13 +1904,13 @@ class GSS:
                 )
 
         # Analysis transform → complex spectrogram
-        x_enc, _ = self.analysis(input=audio)          # (1, ch, freq, frames)
+        x_enc, _ = self.analysis(input=audio)  # (1, ch, freq, frames)
         a_enc = activity_time_to_timefreq(
             activity,
             win_length=self.fft_length,
             hop_length=self.hop_length,
             aggregation=self.activity_aggregation,
-        )                                               # (1, spk, frames)
+        )  # (1, spk, frames)
 
         F = x_enc.size(-2)
         chunk_size = int(math.ceil(F / num_chunks))
@@ -1925,7 +1919,7 @@ class GSS:
         mask_chunks = []
         eigenvalue_chunks = []
         mahalanobis_chunks = []
-        
+
         for n in range(num_chunks):
             n_start = n * chunk_size
             n_end = min(F, (n + 1) * chunk_size)
@@ -1952,7 +1946,7 @@ class GSS:
                 mahalanobis_chunks.append(gss_result_n["mahalanobis"])
 
         mask = torch.concatenate(mask_chunks, dim=-2)  # (1, spk, freq, frames)
-        
+
         # Collect eigenvalues and mahalanobis for return_dict
         if return_dict:
             eigenvalues = torch.concatenate(eigenvalue_chunks, dim=-2)  # (1, spk, freq, channels)
@@ -1994,7 +1988,7 @@ class GSS:
             target_enc = torch.concatenate(target_chunks, dim=-2)
 
             # Synthesis transform → waveform
-            target, _ = self.synthesis(input=target_enc)   # (1, num_channels, samples)
+            target, _ = self.synthesis(input=target_enc)  # (1, num_channels, samples)
 
             # Extract output based on MIMO mode
             if self.mc.filter.is_mimo:
@@ -2009,7 +2003,7 @@ class GSS:
             audio_output = outputs  # List of tensors
         else:
             audio_output = outputs[0]  # Single speaker output
-        
+
         if return_dict:
             # Compute statistics
             masks = mask[0]  # (spk, freq, frames)
@@ -2018,16 +2012,15 @@ class GSS:
             eigenvalues_0 = eigenvalues[0]  # (spk, freq, channels)
             condition_number = eigenvalues_0.amax(dim=-1) / (eigenvalues_0.amin(dim=-1) + 1e-8)
             mahalanobis_0 = mahalanobis[0]  # (spk, freq, frames)
-            
+
             return {
-                'audio': audio_output,
-                'masks': masks,
-                'eigenvalues': eigenvalues_0,
-                'mahalanobis': mahalanobis_0,
-                'occupancy': occupancy,
-                'temporal_variance': temporal_variance,
-                'condition_number': condition_number,
+                "audio": audio_output,
+                "masks": masks,
+                "eigenvalues": eigenvalues_0,
+                "mahalanobis": mahalanobis_0,
+                "occupancy": occupancy,
+                "temporal_variance": temporal_variance,
+                "condition_number": condition_number,
             }
         else:
             return audio_output
-

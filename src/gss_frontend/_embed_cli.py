@@ -44,7 +44,7 @@ Examples:
         nargs="+",
         required=True,
         help="Segment metadata file(s): SegLST format (.seglst) or JSON (.json). "
-             "Can specify multiple files: --segments seg0.json seg1.json seg2.json",
+        "Can specify multiple files: --segments seg0.json seg1.json seg2.json",
     )
 
     parser.add_argument(
@@ -52,7 +52,7 @@ Examples:
         nargs="+",
         required=True,
         help="Original audio file path(s): single multi-channel file or multiple mono files "
-             "(must match the input to gss-enhance in order and sample rate).",
+        "(must match the input to gss-enhance in order and sample rate).",
     )
 
     parser.add_argument(
@@ -61,8 +61,8 @@ Examples:
         default="error",
         choices=["error", "trim", "pad"],
         help="If multiple audio files have different lengths: 'error' (raise), "
-             "'trim' (to shortest), 'pad' (zero-pad to longest). "
-             "Must match gss-enhance --channel-length-mode (default: error).",
+        "'trim' (to shortest), 'pad' (zero-pad to longest). "
+        "Must match gss-enhance --channel-length-mode (default: error).",
     )
 
     parser.add_argument(
@@ -71,7 +71,7 @@ Examples:
         default="samples",
         choices=["samples", "seconds"],
         help="Unit for channel offset: 'samples' (default) or 'seconds'. "
-             "Must match the unit used in gss-enhance --channel-offset-unit.",
+        "Must match the unit used in gss-enhance --channel-offset-unit.",
     )
 
     parser.add_argument(
@@ -80,8 +80,8 @@ Examples:
         nargs="+",
         default=None,
         help="Per-channel time offsets (must match gss-enhance input). "
-             "Example: --channel-offsets 0 -0.1 0.05 (in samples or seconds). "
-             "Required if gss-enhance used --channel-offsets.",
+        "Example: --channel-offsets 0 -0.1 0.05 (in samples or seconds). "
+        "Required if gss-enhance used --channel-offsets.",
     )
 
     parser.add_argument(
@@ -119,13 +119,13 @@ Examples:
         if not seglst_file.exists():
             logger.error(f"Segment metadata file not found: {seglst_file}")
             sys.exit(1)
-        
+
         seglst_data = _load_segments(seglst_file)
         if seglst_data is None:
             sys.exit(1)
         all_segments.extend(seglst_data)
         logger.info(f"Loaded {len(seglst_data)} segments from {seglst_file}")
-    
+
     logger.info(f"Total {len(all_segments)} segments loaded")
 
     # Load original audio(s)
@@ -135,12 +135,10 @@ Examples:
             logger.error(f"Audio file not found: {af}")
             sys.exit(1)
 
-    original_audio, sr = _load_audio_files(
-        audio_files, args.channel_length_mode
-    )
+    original_audio, sr = _load_audio_files(audio_files, args.channel_length_mode)
     if original_audio is None or sr is None:
         sys.exit(1)
-    
+
     logger.info(
         f"Loaded {len(audio_files)} audio file(s): {original_audio.shape[0]} samples, "
         f"{original_audio.shape[1]} channels, {sr} Hz"
@@ -171,7 +169,9 @@ Examples:
     logger.info(f"  Audio files: {len(args.audio)}")
     for i, f in enumerate(args.audio, 1):
         logger.info(f"    [{i}] {f}")
-    logger.info(f"  Audio shape: {original_audio.shape[0]} samples, {original_audio.shape[1]} channels, {sr} Hz")
+    logger.info(
+        f"  Audio shape: {original_audio.shape[0]} samples, {original_audio.shape[1]} channels, {sr} Hz"
+    )
     logger.info(f"  Output directory: {args.output_dir}")
     logger.info(f"  Output format: {args.output_format}")
     logger.info("=" * 60)
@@ -246,24 +246,23 @@ def _load_audio_files(
         # Multiple files: load each as a channel
         channels = []
         sr = None
-        
+
         for i, af in enumerate(audio_files):
             try:
                 ch_audio, ch_sr = sf.read(str(af))
             except Exception as e:
                 logger.error(f"Failed to load {af}: {e}")
                 return None, None
-            
+
             # Check sample rate consistency
             if sr is None:
                 sr = ch_sr
             elif ch_sr != sr:
                 logger.error(
-                    f"Sample rate mismatch: {af} has {ch_sr} Hz, "
-                    f"but first file has {sr} Hz"
+                    f"Sample rate mismatch: {af} has {ch_sr} Hz, " f"but first file has {sr} Hz"
                 )
                 return None, None
-            
+
             # Ensure 1D
             if ch_audio.ndim > 1:
                 logger.error(
@@ -271,14 +270,14 @@ def _load_audio_files(
                     f"Use single multi-channel file or split into mono files."
                 )
                 return None, None
-            
+
             channels.append(ch_audio)
-        
+
         # Align lengths
         lengths = [len(ch) for ch in channels]
         min_len = min(lengths)
         max_len = max(lengths)
-        
+
         if min_len != max_len:
             if channel_length_mode == "error":
                 logger.error(
@@ -295,7 +294,7 @@ def _load_audio_files(
                     np.pad(ch, (0, max_len - len(ch)), mode="constant", constant_values=0)
                     for ch in channels
                 ]
-        
+
         # Stack as columns (samples, channels)
         return np.column_stack(channels), sr
 
@@ -314,18 +313,20 @@ def _load_segments(seglst_file: Path) -> Optional[List[Dict]]:
         with open(seglst_file, "r") as f:
             data = json.load(f)
             return data if isinstance(data, list) else None
-    
+
     elif seglst_file.suffix == ".seglst":
         # Load meeteval SegLST format
         try:
             import meeteval
         except ImportError:
-            logger.error("meeteval is required for .seglst format. Install with: pip install meeteval")
+            logger.error(
+                "meeteval is required for .seglst format. Install with: pip install meeteval"
+            )
             return None
-        
+
         # Load SegLST via meeteval
         seg_list = meeteval.io.load(str(seglst_file))
-        
+
         # Look for accompanying JSON with audio paths
         json_file = seglst_file.parent / "segments.json"
         if json_file.exists():
@@ -376,13 +377,16 @@ def _embed_speaker_segments(
                 f"Must match gss-enhance --channel-offsets."
             )
             return None
-    
+
     # Convert channel offsets to samples if needed
     if channel_offsets is not None and channel_offset_unit == "seconds":
         channel_offsets_samples: List[int] = [int(offset * sr) for offset in channel_offsets]
     else:
-        channel_offsets_samples = [int(o) if isinstance(o, float) else o for o in (channel_offsets or [0] * original_audio.shape[1])]
-    
+        channel_offsets_samples = [
+            int(o) if isinstance(o, float) else o
+            for o in (channel_offsets or [0] * original_audio.shape[1])
+        ]
+
     # Start with a copy of original audio
     result = original_audio.copy()
 
@@ -436,7 +440,7 @@ def _embed_speaker_segments(
             ch_offset = channel_offsets_samples[ch_idx]
             start_in_original = start_sample + ch_offset
             end_in_original = start_in_original + duration_samples
-            
+
             # Validate boundaries
             if start_in_original < 0 or end_in_original > result.shape[0]:
                 logger.warning(

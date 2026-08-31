@@ -1,8 +1,9 @@
 """Tests for multiple speaker enhancement functionality."""
 
-import pytest
 import numpy as np
+import pytest
 import torch
+
 from gss_frontend import GSS
 
 
@@ -48,7 +49,7 @@ class TestMultiSpeakerEnhance:
         activity = np.zeros((num_speakers, samples), dtype=np.float32)
 
         # Speaker 0: active in first 1/3
-        activity[0, :samples // 3] = 1.0
+        activity[0, : samples // 3] = 1.0
         # Speaker 1: active in middle 1/3
         activity[1, samples // 3 : 2 * samples // 3] = 1.0
         # Speaker 2: active in last 1/3
@@ -69,7 +70,7 @@ class TestMultiSpeakerEnhance:
         assert isinstance(result, np.ndarray)
         assert result.dtype == np.float32
         assert result.ndim in [1, 2], f"Expected 1D or 2D result, got shape {result.shape}"
-        
+
         # Output length should match input
         assert result.shape[-1] == dummy_audio.shape[-1]
 
@@ -86,12 +87,15 @@ class TestMultiSpeakerEnhance:
         # For multiple speakers, result should be a list of tensors/arrays
         assert isinstance(result, list), f"Expected list, got {type(result)}"
         assert len(result) == len(speaker_ids)
-        
+
         # Check each element in the list
         for i, output in enumerate(result):
             assert isinstance(output, np.ndarray)
             assert output.dtype == np.float32
-            assert output.ndim in [1, 2], f"Expected 1D or 2D output for speaker {i}, got shape {output.shape}"
+            assert output.ndim in [
+                1,
+                2,
+            ], f"Expected 1D or 2D output for speaker {i}, got shape {output.shape}"
             assert output.shape[-1] == dummy_audio.shape[-1]
 
     def test_multi_speaker_enhancement_tensor(self, gss_instance, dummy_audio, dummy_activity):
@@ -110,7 +114,7 @@ class TestMultiSpeakerEnhance:
         # Result should be a list of torch.Tensor when input is torch.Tensor
         assert isinstance(result, list), f"Expected list, got {type(result)}"
         assert len(result) == len(speaker_ids)
-        
+
         # Check each element in the list
         for i, output in enumerate(result):
             assert isinstance(output, torch.Tensor)
@@ -165,17 +169,23 @@ class TestMultiSpeakerEnhance:
     def test_multi_speaker_with_context(self, gss_instance, dummy_audio, dummy_activity):
         """Test multiple speakers with left/right context."""
         # Extend audio to allow context
-        extended_audio = np.concatenate([
-            dummy_audio * 0.01,  # Left context
-            dummy_audio,
-            dummy_audio * 0.01,  # Right context
-        ], axis=-1)
-        
-        extended_activity = np.concatenate([
-            dummy_activity * 0.1,  # Low activity for context
-            dummy_activity,
-            dummy_activity * 0.1,  # Low activity for context
-        ], axis=-1)
+        extended_audio = np.concatenate(
+            [
+                dummy_audio * 0.01,  # Left context
+                dummy_audio,
+                dummy_audio * 0.01,  # Right context
+            ],
+            axis=-1,
+        )
+
+        extended_activity = np.concatenate(
+            [
+                dummy_activity * 0.1,  # Low activity for context
+                dummy_activity,
+                dummy_activity * 0.1,  # Low activity for context
+            ],
+            axis=-1,
+        )
 
         left_context = 16000 // 4  # 0.25 seconds (4000 samples)
         right_context = 16000 // 4  # 0.25 seconds (4000 samples)
@@ -226,5 +236,5 @@ class TestMultiSpeakerEnhance:
             result_multi_single,
             rtol=1e-5,
             atol=1e-6,
-            err_msg="Single speaker mode should produce consistent results"
+            err_msg="Single speaker mode should produce consistent results",
         )

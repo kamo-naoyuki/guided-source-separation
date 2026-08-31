@@ -20,17 +20,13 @@ def main():
     try:
         from pyannote.audio import Pipeline
     except ImportError:
-        logger.error(
-            "pyannote.audio is required. Install it with: pip install pyannote.audio"
-        )
+        logger.error("pyannote.audio is required. Install it with: pip install pyannote.audio")
         sys.exit(1)
 
     try:
         from dover_lap import DiariaziationComparator
     except ImportError:
-        logger.error(
-            "dover-lap is required for merging. Install it with: pip install dover-lap"
-        )
+        logger.error("dover-lap is required for merging. Install it with: pip install dover-lap")
         sys.exit(1)
 
     parser = argparse.ArgumentParser(
@@ -90,7 +86,7 @@ Examples:
         "--hf-token",
         required=False,
         help="HuggingFace user access token (get from https://huggingface.co/settings/tokens). "
-             "Required for diarization (not needed for --merge-only).",
+        "Required for diarization (not needed for --merge-only).",
     )
 
     parser.add_argument(
@@ -105,7 +101,7 @@ Examples:
         type=int,
         default=None,
         help="For single multi-channel file: select specific channels (0-based indexing). "
-             "If not specified, all channels are used. Example: --channels 0 2 (use channels 0 and 2).",
+        "If not specified, all channels are used. Example: --channels 0 2 (use channels 0 and 2).",
     )
 
     parser.add_argument(
@@ -156,6 +152,7 @@ Examples:
     # Set random seed if specified
     if args.random_seed is not None:
         import random
+
         logger.info(f"Setting random seed to {args.random_seed}")
         random.seed(args.random_seed)
         np.random.seed(args.random_seed)
@@ -185,7 +182,7 @@ Examples:
             sys.exit(1)
 
         input_files = args.audio
-        
+
         logger.info("=" * 60)
         logger.info("Diarization Merging Task")
         logger.info("=" * 60)
@@ -202,7 +199,7 @@ Examples:
         else:
             logger.info(f"  Threshold: automatic (optimal)")
         logger.info("=" * 60)
-        
+
         logger.info(f"Merging {len(input_files)} files...")
 
         # Load diarization data from files (supports JSON and RTTM formats)
@@ -217,16 +214,18 @@ Examples:
         rttm_strings = []
         for input_file in input_files:
             file_ext = Path(input_file).suffix.lower()
-            
+
             logger.info(f"Loading {file_ext} file: {input_file}")
-            
+
             try:
                 # Use meeteval to load JSON or RTTM
                 diarization_data = load(input_file)
                 # Convert to RTTM string
                 rttm_str = str(diarization_data)
                 rttm_strings.append(rttm_str)
-                logger.debug(f"Loaded {len(list(diarization_data.itertracks()))} speaker turns from {input_file}")
+                logger.debug(
+                    f"Loaded {len(list(diarization_data.itertracks()))} speaker turns from {input_file}"
+                )
             except Exception as e:
                 logger.error(f"Failed to load {input_file}: {e}")
                 sys.exit(1)
@@ -250,18 +249,11 @@ Examples:
         if args.threshold is not None:
             logger.info(f"Using fixed threshold {args.threshold}")
             merged = comparator.merge(
-                rttm_strings, 
-                threshold=args.threshold,
-                uem=uem_data,
-                algorithm=algorithm
+                rttm_strings, threshold=args.threshold, uem=uem_data, algorithm=algorithm
             )
         else:
             logger.info(f"Finding optimal threshold using {algorithm} algorithm...")
-            merged = comparator.optimal_threshold(
-                rttm_strings,
-                uem=uem_data,
-                algorithm=algorithm
-            )
+            merged = comparator.optimal_threshold(rttm_strings, uem=uem_data, algorithm=algorithm)
 
         # Save result
         output_file = Path(args.output)
@@ -272,12 +264,12 @@ Examples:
         # Log merged stats
         num_speakers = len(set(label for _, _, label in merged.itertracks(yield_label=True)))
         num_turns = len(list(merged.itertracks()))
-        
+
         # Calculate total duration
         total_duration = 0.0
         for turn, _, _ in merged.itertracks(yield_label=True):
             total_duration = max(total_duration, turn.end)
-        
+
         logger.info("=" * 60)
         logger.info("Diarization Merging Complete")
         logger.info("=" * 60)
@@ -290,11 +282,13 @@ Examples:
 
     # Load pipeline
     logger.info(f"Loading model {args.model}...")
-    
+
     if not args.hf_token:
-        logger.error("--hf-token is required for diarization. Get it from https://huggingface.co/settings/tokens")
+        logger.error(
+            "--hf-token is required for diarization. Get it from https://huggingface.co/settings/tokens"
+        )
         sys.exit(1)
-    
+
     pipeline = Pipeline.from_pretrained(args.model, use_auth_token=args.hf_token)
     pipeline.to(torch.device(args.device))
 
@@ -304,6 +298,7 @@ Examples:
         logger.info(f"Loading UEM file: {args.uem}")
         try:
             from meeteval.io import load
+
             uem_data = load(args.uem)
         except Exception as e:
             logger.error(f"Failed to load UEM file {args.uem}: {e}")
@@ -355,18 +350,14 @@ Examples:
                 # Validate channel indices
                 for ch_idx in channels_to_extract:
                     if ch_idx < 0 or ch_idx >= num_channels:
-                        logger.error(
-                            f"Channel index {ch_idx} out of range [0, {num_channels-1}]"
-                        )
+                        logger.error(f"Channel index {ch_idx} out of range [0, {num_channels-1}]")
                         sys.exit(1)
                 logger.info(
                     f"Extracting {len(channels_to_extract)} selected channels from {audio_file}: {channels_to_extract}..."
                 )
             else:
                 channels_to_extract = list(range(num_channels))
-                logger.info(
-                    f"Extracting {num_channels} channels from {audio_file}..."
-                )
+                logger.info(f"Extracting {num_channels} channels from {audio_file}...")
 
             # Extract channels
             with tempfile.TemporaryDirectory() as tmpdir:
@@ -377,8 +368,13 @@ Examples:
 
                 # Process channels and merge
                 _process_and_merge_channels(
-                    channel_files, pipeline, args.threshold, args.output, output_format,
-                    uem=uem_data, args=args
+                    channel_files,
+                    pipeline,
+                    args.threshold,
+                    args.output,
+                    output_format,
+                    uem=uem_data,
+                    args=args,
                 )
     else:
         # Multiple channel files
@@ -387,8 +383,13 @@ Examples:
         channel_files = args.audio
         logger.info(f"Processing {len(channel_files)} channel files...")
         _process_and_merge_channels(
-            channel_files, pipeline, args.threshold, args.output, output_format,
-            uem=uem_data, args=args
+            channel_files,
+            pipeline,
+            args.threshold,
+            args.output,
+            output_format,
+            uem=uem_data,
+            args=args,
         )
 
     logger.info(f"Merged diarization saved to {args.output}")
@@ -404,7 +405,7 @@ def _process_and_merge_channels(
     args=None,
 ) -> None:
     """Process each channel and merge results.
-    
+
     Args:
         channel_files: List of channel audio files.
         pipeline: pyannote diarization pipeline.
@@ -453,7 +454,9 @@ def _process_and_merge_channels(
         merged = comparator.merge(rttm_strings, threshold=threshold, **merge_kwargs)
     else:
         # Find optimal threshold
-        algorithm_str = args.label_mapping if args and hasattr(args, "label_mapping") else "hungarian"
+        algorithm_str = (
+            args.label_mapping if args and hasattr(args, "label_mapping") else "hungarian"
+        )
         logger.info(f"Finding optimal threshold using {algorithm_str} algorithm...")
         merged = comparator.optimal_threshold(rttm_strings, **merge_kwargs)
 
@@ -466,12 +469,12 @@ def _process_and_merge_channels(
     # Log merged stats
     num_speakers = len(set(label for _, _, label in merged.itertracks(yield_label=True)))
     num_turns = len(list(merged.itertracks()))
-    
+
     # Calculate total duration
     total_duration = 0.0
     for turn, _, _ in merged.itertracks(yield_label=True):
         total_duration = max(total_duration, turn.end)
-    
+
     logger.info("=" * 60)
     logger.info("Diarization Processing Complete")
     logger.info("=" * 60)
@@ -485,7 +488,7 @@ def _process_and_merge_channels(
 
 def _save_diarization(diarization, output_file: Path, output_format: str) -> None:
     """Save diarization result in the specified format.
-    
+
     Args:
         diarization: Diarization object.
         output_file: Path to save the output file.
@@ -500,13 +503,14 @@ def _save_diarization(diarization, output_file: Path, output_format: str) -> Non
                 "meeteval is required for SegLST format. Install it with: pip install meeteval"
             )
             sys.exit(1)
-        
+
         # Write RTTM to temporary file, then convert to SegLST
         import tempfile as tmp_module
-        with tmp_module.NamedTemporaryFile(mode='w', suffix='.rttm', delete=False) as tmp_rttm:
+
+        with tmp_module.NamedTemporaryFile(mode="w", suffix=".rttm", delete=False) as tmp_rttm:
             tmp_rttm_path = tmp_rttm.name
             diarization.write_rttm(tmp_rttm)
-        
+
         try:
             # Load RTTM and write as SegLST
             rttm_data = load_rttm(tmp_rttm_path)

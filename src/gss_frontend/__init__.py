@@ -15,10 +15,10 @@
 from ._frontend import GSS, activity_time_to_timefreq
 from ._modules import (
     AudioToSpectrogram,
-    SpectrogramToAudio,
-    MaskBasedDereverbWPE,
     MaskBasedBeamformer,
+    MaskBasedDereverbWPE,
     MaskEstimatorGSS,
+    SpectrogramToAudio,
 )
 
 __all__ = [
