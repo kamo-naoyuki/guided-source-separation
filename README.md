@@ -38,15 +38,17 @@ dereverberation and mask-based beamforming to enhance one speaker at a time.
 torch
 torchaudio
 numpy
-soundfile  # only needed for file I/O in your own code
+soundfile
+meeteval  # for diarization text/file loading
 ```
 
 No NeMo dependency required. All necessary modules are bundled in `src/gss_frontend/_modules.py`.
 
-Optional (for diarization text/file loading):
+Optional
 
 ```
-meeteval
+pyannote  # for diarization
+dover-lap # for combining diarization results
 ```
 
 ## Installation
@@ -56,6 +58,20 @@ pip install -e .
 
 # For diarization support (pyannote + dover-lap)
 pip install -e ".[diarization]"
+```
+
+Run the tests:
+
+```bash
+pip install -e .
+python -m pytest tests/ -v
+```
+
+Run the example:
+
+```bash
+python examples/separate_speakers.py --device cpu --out-dir /tmp/gss_out
+python examples/tensor_backprop.py --device cpu
 ```
 
 ## Usage
@@ -126,6 +142,51 @@ segment = frontend.enhance_segment(
 sf.write("enhanced.wav", enhanced, sr)
 ```
 
+Long-form file + diarization text/file workflow (via `meeteval.io.load`):
+
+```python
+from gss_frontend import GSS
+
+frontend = GSS(device="cuda")
+
+# diarization can be RTTM/UEM/etc. supported by meeteval.
+# speaker_id can be:
+# - int: speaker index (0-based; in lexicographically sorted unique labels)
+# - str: exact diarization speaker label
+# - list[int|str]: multiple speakers
+# - omitted/None: all speakers
+segments = frontend.enhance_from_diarization(
+    audio_path="meeting.wav",      # or ["ch0.wav", "ch1.wav", ...]
+    diarization="meeting.rttm",    # or ["spkA.rttm", "spkB.rttm", ...] (merged by default)
+    # speaker_id=0,
+    # diarization_format="rttm",   # optional (omit to let meeteval auto-detect)
+    # diarization_session_id=None,   # optional for multi-session diarization
+    # diarization_time_concat=True,  # optional: sequential time-concatenation
+    # diarization_offsets=[0.0, 300.0], # optional explicit per-file time offsets (seconds)
+    # uem="meeting.uem",            # optional: valid regions only
+    # valid_regions=[(10.0, 120.0)], # optional: direct valid regions (seconds)
+    # channel_length_mode="trim",   # for multi-file input: "error" | "trim" | "pad"
+    # channel_offsets=[0, -120, 35], # optional: per-channel shift
+    # channel_offset_unit="samples",# "samples" | "seconds"
+    context_left_seconds=15.0,
+    context_right_seconds=15.0,
+    mode="standard",             # or "oom_fallback"
+    # For distributed processing: partition into 4 groups, process group 0
+    # num_groups=4,
+    # group_id=0,                  # This job processes segments in group 0
+)
+
+# segments is a generator that yields results incrementally (memory-efficient)
+for item in segments:
+    print(
+        item["speaker"],
+        item["segment_start"],
+        item["segment_end"],
+        item["sample_rate"],
+        item["enhanced_audio"].shape,
+    )
+```
+
 ### Blind Source Separation
 
 When speaker activity annotations are unavailable, use **blind BSS mode** to separate all
@@ -173,50 +234,7 @@ noise_sources = [i for i in range(len(is_speech)) if not is_speech[i]]
 See [Complex Angular Central Gaussian Mixture Model (CACGMM)](https://ieeexplore.ieee.org/document/7760429)
 for the underlying clustering algorithm and why eigenvalue analysis reveals speech structure.
 
-Long-form file + diarization text/file workflow (via `meeteval.io.load`):
 
-```python
-from gss_frontend import GSS
-
-frontend = GSS(device="cuda")
-
-# diarization can be RTTM/UEM/etc. supported by meeteval.
-# speaker_id can be:
-# - int: speaker index (0-based; in lexicographically sorted unique labels)
-# - str: exact diarization speaker label
-# - list[int|str]: multiple speakers
-# - omitted/None: all speakers
-segments = frontend.enhance_from_diarization(
-    audio_path="meeting.wav",      # or ["ch0.wav", "ch1.wav", ...]
-    diarization="meeting.rttm",    # or ["spkA.rttm", "spkB.rttm", ...] (merged by default)
-    # speaker_id=0,
-    # diarization_format="rttm",   # optional (omit to let meeteval auto-detect)
-    # diarization_session_id=None,   # optional for multi-session diarization
-    # diarization_time_concat=True,  # optional: sequential time-concatenation
-    # diarization_offsets=[0.0, 300.0], # optional explicit per-file time offsets (seconds)
-    # uem="meeting.uem",            # optional: valid regions only
-    # valid_regions=[(10.0, 120.0)], # optional: direct valid regions (seconds)
-    # channel_length_mode="trim",   # for multi-file input: "error" | "trim" | "pad"
-    # channel_offsets=[0, -120, 35], # optional: per-channel shift
-    # channel_offset_unit="samples",# "samples" | "seconds"
-    context_left_seconds=15.0,
-    context_right_seconds=15.0,
-    mode="standard",             # or "oom_fallback"
-    # For distributed processing: partition into 4 groups, process group 0
-    # num_groups=4,
-    # group_id=0,                  # This job processes segments in group 0
-)
-
-# segments is a generator that yields results incrementally (memory-efficient)
-for item in segments:
-    print(
-        item["speaker"],
-        item["segment_start"],
-        item["segment_end"],
-        item["sample_rate"],
-        item["enhanced_audio"].shape,
-    )
-```
 
 ### Command-line usage
 
@@ -896,38 +914,6 @@ spectrograms (shape `(B, C, F, N)` complex):
 `activity_time_to_timefreq(activity, win_length, hop_length)` converts
 sample-level activity `(B, spk, T)` to frame-level `(B, spk, N)`.
 
-## Repository layout
-
-```
-gss-frontend/
-├── src/
-│   └── gss_frontend/
-│       ├── __init__.py      # exposes GSS
-│       ├── _frontend.py     # GSS class
-│       └── _modules.py      # standalone PyTorch modules (no NeMo)
-├── tests/
-│   └── test_modules.py      # CPU-only unit tests
-├── examples/
-│   ├── separate_speakers.py  # 2-speaker separation demo
-│   └── tensor_backprop.py    # torch.Tensor + backprop demo
-├── pyproject.toml
-└── LICENSE
-```
-
-Run the tests:
-
-```bash
-pip install -e .
-python -m pytest tests/ -v
-```
-
-Run the example:
-
-```bash
-python examples/separate_speakers.py --device cpu --out-dir /tmp/gss_out
-python examples/tensor_backprop.py --device cpu
-```
-
 ## Citation
 
 If you use this repository in academic work, please cite the GSS/front-end
@@ -953,14 +939,3 @@ processing papers it is based on:
     issn      = {2958-1796}
 }
 ```
-
-## Mapping to the original code
-
-| Original | This repo |
-|---|---|
-| `CutEnhancer.enhance_cuts()` | Removed — write your own loop if needed |
-| `FrontEnd_v1.enhance_batch()` | `GSS._enhance_tensor()` (internal) |
-| `lhotse.CutSet` | Removed — pass numpy arrays directly |
-| `Activity` class | Removed — pass `activity` as a numpy array |
-| `GssDataset` / `create_sampler` | Removed |
-| `save_worker` | Removed — handle file I/O in the caller |

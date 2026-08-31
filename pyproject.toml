@@ -12,6 +12,7 @@ dependencies = [
     "torchaudio",
     "numpy",
     "soundfile",
+    "meeteval",
 ]
 
 [project.scripts]
@@ -21,7 +22,6 @@ gss-embed = "gss_frontend._embed_cli:main"
 
 [project.optional-dependencies]
 diarization = [
-    "meeteval",
     "pyannote.audio",
     "dover-lap",
 ]

@@ -39,26 +39,26 @@ def main():
         epilog="""\
 Examples:
   # Process pre-separated channel files
-  gss-multichannel-diarization \\
+  gss-diarize \\
     --audio ch0.wav ch1.wav ch2.wav \\
     --output meeting.rttm \\
     --hf-token <your_hf_token>
 
   # Process single multi-channel file
-  gss-multichannel-diarization \\
+  gss-diarize \\
     --audio meeting_multichannel.wav \\
     --output meeting.rttm \\
     --hf-token <your_hf_token>
 
   # Custom model
-  gss-multichannel-diarization \\
+  gss-diarize \\
     --audio ch0.wav ch1.wav \\
     --model pyannote/speaker-diarization \\
     --output meeting.rttm \\
     --hf-token <your_hf_token>
 
   # With device selection
-  gss-multichannel-diarization \\
+  gss-diarize \\
     --audio ch0.wav ch1.wav \\
     --output meeting.rttm \\
     --device cuda:1 \\
