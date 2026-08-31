@@ -218,14 +218,17 @@ Use the returned statistics to classify each source:
 | Statistic | Interpretation |
 |-----------|-----------------|
 | **condition_number** | λ_max / λ_min per frequency bin; high values (> 10) indicate concentrated subspace → likely **speech** |
-| **occupancy** | Time-averaged mask value [0, 1]; high (> 0.3) → likely **speech**; low → likely **noise** |
+| **occupancy** | Time-averaged mask value [0, 1]; high (> 1/num_sources) → likely **speech**; low → likely **noise**. The threshold depends on how many sources are separated. |
 | **temporal_variance** | Mask variance over time; high → on-off activation pattern → likely **speech**; low → background noise |
 
 **Example heuristic classifier**:
 ```python
 # Average statistics across frequency (eigenvalues → condition_number averaged per freq)
+num_sources = len(occupancy)  # Number of separated sources
+occupancy_threshold = 1.0 / num_sources  # Adaptive threshold based on uniform distribution
+
 mean_condition = condition_number.mean(dim=1)  # (num_sources,)
-is_speech = (mean_condition > 10) & (occupancy > 0.3) & (temporal_variance > 0.01)
+is_speech = (mean_condition > 10) & (occupancy > occupancy_threshold) & (temporal_variance > 0.01)
 
 speech_sources = [i for i in range(len(is_speech)) if is_speech[i]]
 noise_sources = [i for i in range(len(is_speech)) if not is_speech[i]]
