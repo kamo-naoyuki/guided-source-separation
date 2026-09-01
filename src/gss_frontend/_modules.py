@@ -38,6 +38,7 @@ logger = logging.getLogger(__name__)
 # Utility helpers
 # ---------------------------------------------------------------------------
 
+
 def db2mag(db: float) -> float:
     """Convert a value in dB to a linear magnitude ratio."""
     return 10 ** (db / 20)
@@ -80,6 +81,7 @@ def make_seq_mask_like(
 # STFT analysis / synthesis
 # ---------------------------------------------------------------------------
 
+
 class AudioToSpectrogram(torch.nn.Module):
     """Transform a batch of multi-channel waveforms into complex STFT spectrograms.
 
@@ -109,12 +111,16 @@ class AudioToSpectrogram(torch.nn.Module):
         B, T = input.size(0), input.size(-1)
         input = input.view(B, -1, T)
 
-        with torch.amp.autocast('cuda', enabled=False):
+        with torch.amp.autocast("cuda", enabled=False):
             output = self.stft(input.float())  # (B, C, F, N)
 
         if input_length is not None:
-            output_length = input_length.div(self.stft.hop_length, rounding_mode="floor").add(1).long()
-            length_mask = make_seq_mask_like(lengths=output_length, like=output, time_dim=-1, valid_ones=False)
+            output_length = (
+                input_length.div(self.stft.hop_length, rounding_mode="floor").add(1).long()
+            )
+            length_mask = make_seq_mask_like(
+                lengths=output_length, like=output, time_dim=-1, valid_ones=False
+            )
             output = output.masked_fill(length_mask, 0.0)
         else:
             output_length = output.size(-1) * torch.ones(B, device=output.device).long()
@@ -147,12 +153,14 @@ class SpectrogramToAudio(torch.nn.Module):
         assert F == self.F, f"Number of subbands F={F} does not match self.F={self.F}"
         input = input.view(B, -1, F, N)
 
-        with torch.amp.autocast('cuda', enabled=False):
+        with torch.amp.autocast("cuda", enabled=False):
             output = self.istft(input.to(torch.complex64))  # (B, C, T)
 
         if input_length is not None:
             output_length = (input_length - 1) * self.istft.hop_length
-            length_mask = make_seq_mask_like(lengths=output_length, like=output, time_dim=-1, valid_ones=False)
+            length_mask = make_seq_mask_like(
+                lengths=output_length, like=output, time_dim=-1, valid_ones=False
+            )
             output = output.masked_fill(length_mask, 0.0)
         else:
             output_length = output.size(-1) * torch.ones(B, device=output.device).long()
@@ -163,6 +171,7 @@ class SpectrogramToAudio(torch.nn.Module):
 # ---------------------------------------------------------------------------
 # GSS mask estimator
 # ---------------------------------------------------------------------------
+
 
 class MaskEstimatorGSS(torch.nn.Module):
     """Estimate time-frequency masks using Guided Source Separation (GSS).
@@ -223,15 +232,17 @@ class MaskEstimatorGSS(torch.nn.Module):
 
         log_detBM = torch.sum(torch.log(L_normalized), dim=-1)
 
-        zH_invBM_z = torch.einsum("bmfj,bmfkj,bkft->bmftj", (1 / L_normalized.sqrt()).to(Q.dtype), Q.conj(), z)
+        zH_invBM_z = torch.einsum(
+            "bmfj,bmfkj,bkft->bmftj", (1 / L_normalized.sqrt()).to(Q.dtype), Q.conj(), z
+        )
         zH_invBM_z = zH_invBM_z.abs().pow(2).sum(-1) + self.eps
 
         log_pdf = -num_inputs * torch.log(zH_invBM_z) - log_detBM[..., None]
         return log_pdf, zH_invBM_z, L
 
     def forward(
-        self, 
-        input: torch.Tensor, 
+        self,
+        input: torch.Tensor,
         activity: torch.Tensor,
         return_dict: bool = False,
     ) -> Union[torch.Tensor, Dict[str, torch.Tensor]]:
@@ -260,7 +271,7 @@ class MaskEstimatorGSS(torch.nn.Module):
         num_outputs = activity.size(1)
         assert activity.size(0) == B and activity.size(-1) == T
 
-        with torch.amp.autocast('cuda', enabled=False):
+        with torch.amp.autocast("cuda", enabled=False):
             input = input.to(dtype=self.dtype)
             z = self.normalize(input, dim=-3)
 
@@ -292,6 +303,7 @@ class MaskEstimatorGSS(torch.nn.Module):
 # ---------------------------------------------------------------------------
 # WPE dereverberation filter
 # ---------------------------------------------------------------------------
+
 
 class WPEFilter(torch.nn.Module):
     """Weighted Prediction Error filter for MIMO dereverberation.
@@ -325,20 +337,28 @@ class WPEFilter(torch.nn.Module):
         weight = torch.mean(power, dim=1)
         weight = 1 / (weight + self.eps)
 
-        tilde_input = self.convtensor(input, filter_length=self.filter_length, delay=self.prediction_delay)
-        Q, R = self.estimate_correlations(input=input, weight=weight, tilde_input=tilde_input, input_length=input_length)
+        tilde_input = self.convtensor(
+            input, filter_length=self.filter_length, delay=self.prediction_delay
+        )
+        Q, R = self.estimate_correlations(
+            input=input, weight=weight, tilde_input=tilde_input, input_length=input_length
+        )
         G = self.estimate_filter(Q=Q, R=R)
         undesired = self.apply_filter(filter=G, tilde_input=tilde_input)
         desired = input - undesired
 
         if input_length is not None:
-            length_mask = make_seq_mask_like(lengths=input_length, like=desired, time_dim=-1, valid_ones=False)
+            length_mask = make_seq_mask_like(
+                lengths=input_length, like=desired, time_dim=-1, valid_ones=False
+            )
             desired = desired.masked_fill(length_mask, 0.0)
 
         return desired, input_length
 
     @classmethod
-    def convtensor(cls, x: torch.Tensor, filter_length: int, delay: int = 0, n_steps: Optional[int] = None):
+    def convtensor(
+        cls, x: torch.Tensor, filter_length: int, delay: int = 0, n_steps: Optional[int] = None
+    ):
         if x.ndim != 4:
             raise RuntimeError(f"Expecting 4-D input, got {x.shape}")
         B, C, F, N = x.shape
@@ -350,9 +370,13 @@ class WPEFilter(torch.nn.Module):
 
     def estimate_correlations(self, input, weight, tilde_input, input_length=None):
         if input_length is not None:
-            length_mask = make_seq_mask_like(lengths=input_length, like=weight, time_dim=-1, valid_ones=False)
+            length_mask = make_seq_mask_like(
+                lengths=input_length, like=weight, time_dim=-1, valid_ones=False
+            )
             weight = weight.masked_fill(length_mask, 0.0)
-        Q = torch.einsum("bjfik,bmfin->bfjkmn", tilde_input.conj(), weight[:, None, :, :, None] * tilde_input)
+        Q = torch.einsum(
+            "bjfik,bmfin->bfjkmn", tilde_input.conj(), weight[:, None, :, :, None] * tilde_input
+        )
         R = torch.einsum("bjfik,bmfi->bfjkm", tilde_input.conj(), weight[:, None, :, :] * input)
         return Q, R
 
@@ -363,7 +387,9 @@ class WPEFilter(torch.nn.Module):
 
         if self.diag_reg:
             diag_reg = self.diag_reg * torch.diagonal(Q, dim1=-2, dim2=-1).sum(-1).real + self.eps
-            Q = Q + torch.diag_embed(diag_reg.unsqueeze(-1) * torch.ones(Q.shape[-1], device=Q.device))
+            Q = Q + torch.diag_embed(
+                diag_reg.unsqueeze(-1) * torch.ones(Q.shape[-1], device=Q.device)
+            )
 
         fail = False
         try:
@@ -387,13 +413,16 @@ class WPEFilter(torch.nn.Module):
         if input is not None and tilde_input is not None:
             raise RuntimeError("Provide either input or tilde_input, not both")
         if tilde_input is None:
-            tilde_input = self.convtensor(input, filter_length=self.filter_length, delay=self.prediction_delay)
+            tilde_input = self.convtensor(
+                input, filter_length=self.filter_length, delay=self.prediction_delay
+            )
         return torch.einsum("bjfik,bmfjk->bmfi", tilde_input, filter)
 
 
 # ---------------------------------------------------------------------------
 # WPE-based dereverberation
 # ---------------------------------------------------------------------------
+
 
 class MaskBasedDereverbWPE(torch.nn.Module):
     """Iterative WPE dereverberation with optional TF mask.
@@ -421,7 +450,12 @@ class MaskBasedDereverbWPE(torch.nn.Module):
         dtype: torch.dtype = torch.cdouble,
     ):
         super().__init__()
-        self.filter = WPEFilter(filter_length=filter_length, prediction_delay=prediction_delay, diag_reg=diag_reg, eps=eps)
+        self.filter = WPEFilter(
+            filter_length=filter_length,
+            prediction_delay=prediction_delay,
+            diag_reg=diag_reg,
+            eps=eps,
+        )
         self.num_iterations = num_iterations
         self.mask_min = db2mag(mask_min_db)
         self.mask_max = db2mag(mask_max_db)
@@ -437,7 +471,7 @@ class MaskBasedDereverbWPE(torch.nn.Module):
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
         io_dtype = input.dtype
 
-        with torch.amp.autocast('cuda', enabled=False):
+        with torch.amp.autocast("cuda", enabled=False):
             output = input.to(dtype=self.dtype)
             if not output.is_complex():
                 raise RuntimeError(f"Expecting complex input, got {output.dtype}")
@@ -447,8 +481,10 @@ class MaskBasedDereverbWPE(torch.nn.Module):
                 if i == 0 and mask is not None:
                     mask = torch.clamp(mask, min=self.mask_min, max=self.mask_max)
                     magnitude = mask * magnitude
-                power = magnitude ** 2
-                output, output_length = self.filter(input=output, input_length=input_length, power=power)
+                power = magnitude**2
+                output, output_length = self.filter(
+                    input=output, input_length=input_length, power=power
+                )
 
         return output.to(io_dtype), output_length
 
@@ -456,6 +492,7 @@ class MaskBasedDereverbWPE(torch.nn.Module):
 # ---------------------------------------------------------------------------
 # Reference channel estimator
 # ---------------------------------------------------------------------------
+
 
 class ReferenceChannelEstimatorSNR(torch.nn.Module):
     """Select (or softly weight) the reference channel by maximising output SNR.
@@ -496,7 +533,9 @@ class ReferenceChannelEstimatorSNR(torch.nn.Module):
         if self.subband_weighting:
             pow_s = torch.einsum("...jm,...jk,...km->...m", W.conj(), psd_s, W).abs()
             pow_n = torch.einsum("...jm,...jk,...km->...m", W.conj(), psd_n, W).abs()
-            assert self.weight_s is not None and self.weight_n is not None, "weights must be initialized when subband_weighting=True"
+            assert (
+                self.weight_s is not None and self.weight_n is not None
+            ), "weights must be initialized when subband_weighting=True"
             pow_s = torch.sum(pow_s * self.weight_s.softmax(dim=0).unsqueeze(1), dim=-2)
             pow_n = torch.sum(pow_n * self.weight_n.softmax(dim=0).unsqueeze(1), dim=-2)
         else:
@@ -522,6 +561,7 @@ class ReferenceChannelEstimatorSNR(torch.nn.Module):
 # ---------------------------------------------------------------------------
 # Parametric Multichannel Wiener Filter
 # ---------------------------------------------------------------------------
+
 
 class ParametricMultichannelWienerFilter(torch.nn.Module):
     """Parametric multichannel Wiener filter (PMWF / MVDR).
@@ -589,12 +629,16 @@ class ParametricMultichannelWienerFilter(torch.nn.Module):
         if self.diag_reg is None:
             return psd
         diag_reg = self.diag_reg * self.trace(psd).real + self.eps
-        return psd + torch.diag_embed(diag_reg.unsqueeze(-1) * torch.ones(psd.shape[-1], device=psd.device))
+        return psd + torch.diag_embed(
+            diag_reg.unsqueeze(-1) * torch.ones(psd.shape[-1], device=psd.device)
+        )
 
     def apply_filter(self, input: torch.Tensor, filter: torch.Tensor) -> torch.Tensor:
         return torch.einsum("bfcm,bcft->bmft", filter.conj(), input)
 
-    def apply_ban(self, input: torch.Tensor, filter: torch.Tensor, psd_n: torch.Tensor) -> torch.Tensor:
+    def apply_ban(
+        self, input: torch.Tensor, filter: torch.Tensor, psd_n: torch.Tensor
+    ) -> torch.Tensor:
         num_inputs = filter.size(-2)
         numerator = torch.einsum("bfcm,bfci,bfij,bfjm->bmf", filter.conj(), psd_n, psd_n, filter)
         numerator = torch.sqrt(numerator.abs() / num_inputs)
@@ -610,7 +654,7 @@ class ParametricMultichannelWienerFilter(torch.nn.Module):
     ) -> torch.Tensor:
         iodtype = input.dtype
 
-        with torch.amp.autocast('cuda', enabled=False):
+        with torch.amp.autocast("cuda", enabled=False):
             input = input.to(torch.complex128)
             mask_s = mask_s.double()
             mask_n = mask_n.double()
@@ -649,6 +693,7 @@ class ParametricMultichannelWienerFilter(torch.nn.Module):
 # ---------------------------------------------------------------------------
 # Mask-based beamformer
 # ---------------------------------------------------------------------------
+
 
 class MaskBasedBeamformer(torch.nn.Module):
     """Multi-channel beamformer driven by time-frequency masks.
@@ -711,7 +756,9 @@ class MaskBasedBeamformer(torch.nn.Module):
         self.mask_max = db2mag(mask_max_db)
 
         if postmask_min_db > postmask_max_db:
-            raise ValueError(f"postmask_min_db ({postmask_min_db}) must be <= postmask_max_db ({postmask_max_db})")
+            raise ValueError(
+                f"postmask_min_db ({postmask_min_db}) must be <= postmask_max_db ({postmask_max_db})"
+            )
         self.postmask_min = db2mag(postmask_min_db)
         self.postmask_max = db2mag(postmask_max_db)
 
@@ -723,7 +770,9 @@ class MaskBasedBeamformer(torch.nn.Module):
         input_length: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
         if input_length is not None:
-            length_mask = make_seq_mask_like(lengths=input_length, like=mask[:, 0, ...], time_dim=-1, valid_ones=False)
+            length_mask = make_seq_mask_like(
+                lengths=input_length, like=mask[:, 0, ...], time_dim=-1, valid_ones=False
+            )
 
         output = []
         num_masks = mask.size(1)
@@ -746,7 +795,9 @@ class MaskBasedBeamformer(torch.nn.Module):
             output_m = self.filter(input=input, mask_s=mask_d, mask_n=mask_u)
 
             if self.postmask_min < self.postmask_max:
-                postmask_m = torch.clamp(mask[:, m, ...], min=self.postmask_min, max=self.postmask_max)
+                postmask_m = torch.clamp(
+                    mask[:, m, ...], min=self.postmask_min, max=self.postmask_max
+                )
                 output_m = output_m * postmask_m.unsqueeze(1)
 
             output.append(output_m)

@@ -378,7 +378,7 @@ squeue -u $USER
 ls -la enhanced/group_*/
 ```
 
-Output files from all groups will be named consistently (e.g., `000_spkA_10.50_15.75.wav`, 
+Output files from all groups will be named consistently (e.g., `000_spkA_10.50_15.75.wav`,
 `001_spkB_20.00_28.30.wav`, etc.), making them easy to combine or process further.
 
 See `gss-enhance --help` for all options.
@@ -601,11 +601,11 @@ audio_multichannel, sr = sf.read("meeting.wav")  # shape: (samples, channels)
 diarizations = []
 for ch_idx in range(audio_multichannel.shape[1]):
     channel_audio = audio_multichannel[:, ch_idx]
-    
+
     # Write temporary mono audio
     temp_file = f"_temp_ch{ch_idx}.wav"
     sf.write(temp_file, channel_audio, sr)
-    
+
     # Run diarization
     diarization = pipeline(temp_file)
     diarizations.append(diarization)
@@ -887,7 +887,7 @@ Recommended for large audio files.
 
 - **`audio`** — `(channels, samples)` float32 `numpy.ndarray` or `torch.Tensor`
 - **`num_sources`** — number of sources to separate
-- **Returns** — dict with same keys as `enhance_unguided()`: `'audio'`, `'masks'`, 
+- **Returns** — dict with same keys as `enhance_unguided()`: `'audio'`, `'masks'`,
   `'eigenvalues'`, `'mahalanobis'`, `'occupancy'`, `'temporal_variance'`, `'condition_number'`
 
 ### `GSS.estimate_masks(audio, activity, garbage_class=None)`

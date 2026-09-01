@@ -23,30 +23,30 @@ Run with:
 """
 
 import math
-import pytest
-import numpy as np
-import torch
-import gss_frontend._frontend as frontend_module
 
-from gss_frontend._modules import (
-    AudioToSpectrogram,
-    SpectrogramToAudio,
-    MaskEstimatorGSS,
-    MaskBasedDereverbWPE,
-    MaskBasedBeamformer,
-    ParametricMultichannelWienerFilter,
-    db2mag,
-    make_seq_mask_like,
-)
+import numpy as np
+import pytest
+import torch
+
+import gss_frontend._frontend as frontend_module
 from gss_frontend import GSS
 from gss_frontend._frontend import (
-    activity_time_to_timefreq,
-    samples_to_frames,
     _build_activity_from_diarization,
     _load_diarization_segments,
     _load_uem_regions,
+    activity_time_to_timefreq,
+    samples_to_frames,
 )
-
+from gss_frontend._modules import (
+    AudioToSpectrogram,
+    MaskBasedBeamformer,
+    MaskBasedDereverbWPE,
+    MaskEstimatorGSS,
+    ParametricMultichannelWienerFilter,
+    SpectrogramToAudio,
+    db2mag,
+    make_seq_mask_like,
+)
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -91,6 +91,7 @@ def spectrogram(audio_batch):
 # ---------------------------------------------------------------------------
 # Utility helpers
 # ---------------------------------------------------------------------------
+
 
 class TestUtilities:
     def test_db2mag_zero(self):
@@ -309,20 +310,24 @@ class TestDiarizationHelpers:
 
         def _fake_enhance_segment(**kwargs):
             calls.append(kwargs)
-            seg_len = int(round((kwargs["segment_end"] - kwargs["segment_start"]) * kwargs["sample_rate"]))
+            seg_len = int(
+                round((kwargs["segment_end"] - kwargs["segment_start"]) * kwargs["sample_rate"])
+            )
             return np.zeros((seg_len,), dtype=np.float32)
 
         monkeypatch.setattr(frontend_module, "_import_meeteval_io", lambda: _FakeMeetevalIO)
         monkeypatch.setattr("torchaudio.load", _fake_torchaudio_load)
         monkeypatch.setattr(frontend, "enhance_segment", _fake_enhance_segment)
 
-        outputs = list(frontend.enhance_from_diarization(
-            audio_path="dummy.wav",
-            diarization="dummy.rttm",
-            speaker_id="spkA",
-            context_left_seconds=0.5,
-            context_right_seconds=0.5,
-        ))
+        outputs = list(
+            frontend.enhance_from_diarization(
+                audio_path="dummy.wav",
+                diarization="dummy.rttm",
+                speaker_id="spkA",
+                context_left_seconds=0.5,
+                context_right_seconds=0.5,
+            )
+        )
 
         assert len(outputs) == 2
         assert len(calls) == 2
@@ -355,11 +360,13 @@ class TestDiarizationHelpers:
         monkeypatch.setattr("torchaudio.load", _fake_torchaudio_load)
         monkeypatch.setattr(frontend, "enhance_segment", _fake_enhance_segment)
 
-        outputs = list(frontend.enhance_from_diarization(
-            audio_path="dummy.wav",
-            diarization="dummy.rttm",
-            speaker_id=1,
-        ))
+        outputs = list(
+            frontend.enhance_from_diarization(
+                audio_path="dummy.wav",
+                diarization="dummy.rttm",
+                speaker_id=1,
+            )
+        )
 
         assert len(outputs) == 1
         assert outputs[0]["speaker"] == "spkB"
@@ -393,10 +400,12 @@ class TestDiarizationHelpers:
         monkeypatch.setattr("torchaudio.load", _fake_torchaudio_load)
         monkeypatch.setattr(frontend, "enhance_segment", _fake_enhance_segment)
 
-        outputs = list(frontend.enhance_from_diarization(
-            audio_path="dummy.wav",
-            diarization="dummy.rttm",
-        ))
+        outputs = list(
+            frontend.enhance_from_diarization(
+                audio_path="dummy.wav",
+                diarization="dummy.rttm",
+            )
+        )
 
         assert len(outputs) == 3
         assert [out["speaker"] for out in outputs] == ["spkA", "spkB", "spkA"]
@@ -429,11 +438,13 @@ class TestDiarizationHelpers:
         monkeypatch.setattr("torchaudio.load", _fake_torchaudio_load)
         monkeypatch.setattr(frontend, "enhance_segment", _fake_enhance_segment)
 
-        outputs = list(frontend.enhance_from_diarization(
-            audio_path="dummy.wav",
-            diarization="dummy.rttm",
-            speaker_id=["spkC", 0],
-        ))
+        outputs = list(
+            frontend.enhance_from_diarization(
+                audio_path="dummy.wav",
+                diarization="dummy.rttm",
+                speaker_id=["spkC", 0],
+            )
+        )
 
         assert len(outputs) == 2
         assert [out["speaker"] for out in outputs] == ["spkA", "spkC"]
@@ -471,12 +482,14 @@ class TestDiarizationHelpers:
         monkeypatch.setattr("torchaudio.load", _fake_torchaudio_load)
         monkeypatch.setattr(frontend, "enhance_segment", _fake_enhance_segment)
 
-        outputs = list(frontend.enhance_from_diarization(
-            audio_path="dummy.wav",
-            diarization="dummy.rttm",
-            uem="dummy.uem",
-            speaker_id="spkA",
-        ))
+        outputs = list(
+            frontend.enhance_from_diarization(
+                audio_path="dummy.wav",
+                diarization="dummy.rttm",
+                uem="dummy.uem",
+                speaker_id="spkA",
+            )
+        )
 
         assert len(outputs) == 1
         assert len(calls) == 1
@@ -513,14 +526,16 @@ class TestDiarizationHelpers:
         monkeypatch.setattr("torchaudio.load", _fake_torchaudio_load)
         monkeypatch.setattr(frontend, "enhance_segment", _fake_enhance_segment)
 
-        list(frontend.enhance_from_diarization(
-            audio_path="dummy.wav",
-            diarization="dummy.rttm",
-            uem="dummy.uem",
-            speaker_id="spkA",
-            context_left_seconds=0.5,
-            context_right_seconds=0.5,
-        ))
+        list(
+            frontend.enhance_from_diarization(
+                audio_path="dummy.wav",
+                diarization="dummy.rttm",
+                uem="dummy.uem",
+                speaker_id="spkA",
+                context_left_seconds=0.5,
+                context_right_seconds=0.5,
+            )
+        )
 
         assert len(calls) == 1
         assert calls[0]["context_left_seconds"] == pytest.approx(0.02)
@@ -554,12 +569,14 @@ class TestDiarizationHelpers:
         monkeypatch.setattr("torchaudio.load", _fake_torchaudio_load)
         monkeypatch.setattr(frontend, "enhance_segment", _fake_enhance_segment)
 
-        outputs = list(frontend.enhance_from_diarization(
-            audio_path="dummy.wav",
-            diarization="dummy.rttm",
-            speaker_id="spkA",
-            valid_regions=[(0.10, 0.35)],
-        ))
+        outputs = list(
+            frontend.enhance_from_diarization(
+                audio_path="dummy.wav",
+                diarization="dummy.rttm",
+                speaker_id="spkA",
+                valid_regions=[(0.10, 0.35)],
+            )
+        )
 
         assert len(outputs) == 1
         assert len(calls) == 1
@@ -592,14 +609,16 @@ class TestDiarizationHelpers:
         monkeypatch.setattr("torchaudio.load", _fake_torchaudio_load)
         monkeypatch.setattr(frontend, "enhance_segment", _fake_enhance_segment)
 
-        list(frontend.enhance_from_diarization(
-            audio_path="dummy.wav",
-            diarization="dummy.rttm",
-            speaker_id="spkA",
-            valid_regions=[{"start": 0.18, "end": 0.26}],
-            context_left_seconds=0.5,
-            context_right_seconds=0.5,
-        ))
+        list(
+            frontend.enhance_from_diarization(
+                audio_path="dummy.wav",
+                diarization="dummy.rttm",
+                speaker_id="spkA",
+                valid_regions=[{"start": 0.18, "end": 0.26}],
+                context_left_seconds=0.5,
+                context_right_seconds=0.5,
+            )
+        )
 
         assert len(calls) == 1
         assert calls[0]["context_left_seconds"] == pytest.approx(0.02)
@@ -636,13 +655,15 @@ class TestDiarizationHelpers:
         monkeypatch.setattr("torchaudio.load", _fake_torchaudio_load)
         monkeypatch.setattr(frontend, "enhance_segment", _fake_enhance_segment)
 
-        outputs = list(frontend.enhance_from_diarization(
-            audio_path="dummy.wav",
-            diarization="dummy.rttm",
-            speaker_id="spkA",
-            uem="dummy.uem",
-            valid_regions=[(0.18, 0.25)],
-        ))
+        outputs = list(
+            frontend.enhance_from_diarization(
+                audio_path="dummy.wav",
+                diarization="dummy.rttm",
+                speaker_id="spkA",
+                uem="dummy.uem",
+                valid_regions=[(0.18, 0.25)],
+            )
+        )
 
         assert len(outputs) == 1
         assert len(calls) == 1
@@ -678,12 +699,14 @@ class TestDiarizationHelpers:
         monkeypatch.setattr("torchaudio.load", _fake_torchaudio_load)
         monkeypatch.setattr(frontend, "enhance_segment", _fake_enhance_segment)
 
-        outputs = list(frontend.enhance_from_diarization(
-            audio_path=["ch0.wav", "ch1.wav"],
-            diarization="dummy.rttm",
-            speaker_id="spkA",
-            channel_length_mode="trim",
-        ))
+        outputs = list(
+            frontend.enhance_from_diarization(
+                audio_path=["ch0.wav", "ch1.wav"],
+                diarization="dummy.rttm",
+                speaker_id="spkA",
+                channel_length_mode="trim",
+            )
+        )
 
         assert len(outputs) == 1
         assert len(calls) == 1
@@ -708,12 +731,14 @@ class TestDiarizationHelpers:
         monkeypatch.setattr("torchaudio.load", _fake_torchaudio_load)
 
         with pytest.raises(ValueError):
-            list(frontend.enhance_from_diarization(
-                audio_path=["ch0.wav", "ch1.wav"],
-                diarization="dummy.rttm",
-                speaker_id="spkA",
-                channel_length_mode="error",
-            ))
+            list(
+                frontend.enhance_from_diarization(
+                    audio_path=["ch0.wav", "ch1.wav"],
+                    diarization="dummy.rttm",
+                    speaker_id="spkA",
+                    channel_length_mode="error",
+                )
+            )
 
     def test_enhance_from_diarization_multi_file_audio_pad_mode(self, monkeypatch):
         frontend = GSS(device="cpu")
@@ -744,12 +769,14 @@ class TestDiarizationHelpers:
         monkeypatch.setattr("torchaudio.load", _fake_torchaudio_load)
         monkeypatch.setattr(frontend, "enhance_segment", _fake_enhance_segment)
 
-        outputs = list(frontend.enhance_from_diarization(
-            audio_path=["ch0.wav", "ch1.wav"],
-            diarization="dummy.rttm",
-            speaker_id="spkA",
-            channel_length_mode="pad",
-        ))
+        outputs = list(
+            frontend.enhance_from_diarization(
+                audio_path=["ch0.wav", "ch1.wav"],
+                diarization="dummy.rttm",
+                speaker_id="spkA",
+                channel_length_mode="pad",
+            )
+        )
 
         assert len(outputs) == 1
         assert len(calls) == 1
@@ -784,14 +811,16 @@ class TestDiarizationHelpers:
         monkeypatch.setattr("torchaudio.load", _fake_torchaudio_load)
         monkeypatch.setattr(frontend, "enhance_segment", _fake_enhance_segment)
 
-        outputs = list(frontend.enhance_from_diarization(
-            audio_path=["ch0.wav", "ch1.wav"],
-            diarization="dummy.rttm",
-            speaker_id="spkA",
-            channel_length_mode="trim",
-            channel_offsets=[0, 2],
-            channel_offset_unit="samples",
-        ))
+        outputs = list(
+            frontend.enhance_from_diarization(
+                audio_path=["ch0.wav", "ch1.wav"],
+                diarization="dummy.rttm",
+                speaker_id="spkA",
+                channel_length_mode="trim",
+                channel_offsets=[0, 2],
+                channel_offset_unit="samples",
+            )
+        )
 
         assert len(outputs) == 1
         assert len(calls) == 1
@@ -822,12 +851,14 @@ class TestDiarizationHelpers:
         monkeypatch.setattr("torchaudio.load", _fake_torchaudio_load)
         monkeypatch.setattr(frontend, "enhance_segment", _fake_enhance_segment)
 
-        outputs = list(frontend.enhance_from_diarization(
-            audio_path="dummy.wav",
-            diarization=["part1.rttm", "part2.rttm"],
-            speaker_id="spkA",
-            diarization_time_concat=True,
-        ))
+        outputs = list(
+            frontend.enhance_from_diarization(
+                audio_path="dummy.wav",
+                diarization=["part1.rttm", "part2.rttm"],
+                speaker_id="spkA",
+                diarization_time_concat=True,
+            )
+        )
 
         assert len(outputs) == 2
         assert calls[0]["segment_start"] == pytest.approx(0.1)
@@ -860,11 +891,13 @@ class TestDiarizationHelpers:
         monkeypatch.setattr("torchaudio.load", _fake_torchaudio_load)
         monkeypatch.setattr(frontend, "enhance_segment", _fake_enhance_segment)
 
-        outputs = list(frontend.enhance_from_diarization(
-            audio_path="dummy.wav",
-            diarization=["spkA.rttm", "spkB.rttm"],
-            speaker_id=None,
-        ))
+        outputs = list(
+            frontend.enhance_from_diarization(
+                audio_path="dummy.wav",
+                diarization=["spkA.rttm", "spkB.rttm"],
+                speaker_id=None,
+            )
+        )
 
         assert len(outputs) == 2
         # merge mode keeps original timestamps (no sequential shift)
@@ -888,17 +921,20 @@ class TestDiarizationHelpers:
         monkeypatch.setattr("torchaudio.load", _fake_torchaudio_load)
 
         with pytest.raises(ValueError):
-            list(frontend.enhance_from_diarization(
-                audio_path="dummy.wav",
-                diarization="dummy.rttm",
-                speaker_id="spkA",
-                channel_offsets=[0],
-            ))
+            list(
+                frontend.enhance_from_diarization(
+                    audio_path="dummy.wav",
+                    diarization="dummy.rttm",
+                    speaker_id="spkA",
+                    channel_offsets=[0],
+                )
+            )
 
 
 # ---------------------------------------------------------------------------
 # STFT round-trip
 # ---------------------------------------------------------------------------
+
 
 class TestSTFT:
     def test_analysis_output_shape(self, audio_batch):
@@ -942,6 +978,7 @@ class TestSTFT:
 # ---------------------------------------------------------------------------
 # MaskEstimatorGSS
 # ---------------------------------------------------------------------------
+
 
 class TestMaskEstimatorGSS:
     def test_output_shape(self, spectrogram, activity_batch):
@@ -991,6 +1028,7 @@ class TestMaskEstimatorGSS:
 # MaskBasedDereverbWPE
 # ---------------------------------------------------------------------------
 
+
 class TestMaskBasedDereverbWPE:
     def test_output_shape_equals_input(self, spectrogram):
         dereverb = MaskBasedDereverbWPE(
@@ -1023,6 +1061,7 @@ class TestMaskBasedDereverbWPE:
 # ---------------------------------------------------------------------------
 # MaskBasedBeamformer
 # ---------------------------------------------------------------------------
+
 
 class TestMaskBasedBeamformer:
     def _make_masks(self, spectrogram):
@@ -1059,6 +1098,7 @@ class TestMaskBasedBeamformer:
 # End-to-end GSS.enhance()
 # ---------------------------------------------------------------------------
 
+
 class TestGSSEnhance:
     @pytest.fixture
     def frontend(self):
@@ -1082,16 +1122,15 @@ class TestGSSEnhance:
         gains0 = np.array([1.0, 0.8, 0.4, 0.1], dtype=np.float32)
         gains1 = np.array([0.1, 0.4, 0.8, 1.0], dtype=np.float32)
         src0 = np.sin(2 * np.pi * 300.0 * t).astype(np.float32)
-        src0[2 * seg :] = 0.0                      # active in [0, 2/3)
+        src0[2 * seg :] = 0.0  # active in [0, 2/3)
         src1 = np.sin(2 * np.pi * 800.0 * t).astype(np.float32)
-        src1[: seg] = 0.0                          # active in [1/3, 1)
-        audio = (gains0[:, None] * src0[None, :] +
-                 gains1[:, None] * src1[None, :])
+        src1[:seg] = 0.0  # active in [1/3, 1)
+        audio = gains0[:, None] * src0[None, :] + gains1[:, None] * src1[None, :]
         rng = np.random.default_rng(42)
         audio += rng.standard_normal(audio.shape).astype(np.float32) * 0.01
         activity = np.zeros((2, N_SAMPLES), dtype=np.float32)
         activity[0, : 2 * seg] = 1.0
-        activity[1, seg :] = 1.0
+        activity[1, seg:] = 1.0
         return audio, activity
 
     def test_output_shape(self, frontend):
@@ -1112,11 +1151,14 @@ class TestGSSEnhance:
 
     def test_output_length_matches_input_minus_context(self, frontend):
         audio, activity = self._make_inputs()
-        left_ctx = 1600   # 0.1 s
+        left_ctx = 1600  # 0.1 s
         right_ctx = 1600
         enhanced = frontend.enhance(
-            audio, activity, speaker_id=0,
-            left_context=left_ctx, right_context=right_ctx,
+            audio,
+            activity,
+            speaker_id=0,
+            left_context=left_ctx,
+            right_context=right_ctx,
         )
         expected_len = N_SAMPLES - left_ctx - right_ctx
         # Allow slight STFT-reconstruction offset
@@ -1127,8 +1169,9 @@ class TestGSSEnhance:
         audio, activity = self._make_inputs()
         out0 = frontend.enhance(audio, activity, speaker_id=0)
         out1 = frontend.enhance(audio, activity, speaker_id=1)
-        assert not np.allclose(out0[:min(len(out0), len(out1))],
-                               out1[:min(len(out0), len(out1))], atol=1e-6)
+        assert not np.allclose(
+            out0[: min(len(out0), len(out1))], out1[: min(len(out0), len(out1))], atol=1e-6
+        )
 
     def test_enhance_auto_matches_enhance(self, frontend):
         """enhance_auto with no OOM should give the same result as enhance."""
@@ -1299,6 +1342,7 @@ class TestGSSEnhance:
 # Standalone pipeline stages
 # ---------------------------------------------------------------------------
 
+
 class TestGSSStandaloneAPIs:
     @pytest.fixture
     def frontend(self):
@@ -1372,9 +1416,16 @@ class TestGSSStandaloneAPIs:
         rng = np.random.default_rng(42)
         audio = rng.standard_normal((N_CHANNELS, N_SAMPLES)).astype(np.float32)
         result = frontend.enhance_unguided(audio, num_sources=N_SPEAKERS)
-        
-        expected_keys = {"audio", "masks", "eigenvalues", "mahalanobis", "occupancy", 
-                         "temporal_variance", "condition_number"}
+
+        expected_keys = {
+            "audio",
+            "masks",
+            "eigenvalues",
+            "mahalanobis",
+            "occupancy",
+            "temporal_variance",
+            "condition_number",
+        }
         assert set(result.keys()) == expected_keys
 
     def test_enhance_unguided_masks_shape(self, frontend):
@@ -1384,7 +1435,7 @@ class TestGSSStandaloneAPIs:
         result = frontend.enhance_unguided(audio, num_sources=N_SPEAKERS)
         masks = result["masks"]
         F = FFT_LENGTH // 2 + 1
-        
+
         assert masks.shape[0] == N_SPEAKERS
         assert masks.shape[1] == F
         assert masks.ndim == 3
@@ -1395,7 +1446,7 @@ class TestGSSStandaloneAPIs:
         audio = rng.standard_normal((N_CHANNELS, N_SAMPLES)).astype(np.float32)
         result = frontend.enhance_unguided(audio, num_sources=N_SPEAKERS)
         masks = result["masks"]
-        
+
         assert masks.min() >= 0.0
         assert masks.max() <= 1.0 + 1e-6
 
@@ -1404,12 +1455,19 @@ class TestGSSStandaloneAPIs:
         rng = np.random.default_rng(42)
         audio = rng.standard_normal((N_CHANNELS, N_SAMPLES)).astype(np.float32)
         result = frontend.enhance_unguided_auto(audio, num_sources=N_SPEAKERS)
-        
+
         # Should return dict with expected keys
-        expected_keys = {"audio", "masks", "eigenvalues", "mahalanobis", "occupancy", 
-                         "temporal_variance", "condition_number"}
+        expected_keys = {
+            "audio",
+            "masks",
+            "eigenvalues",
+            "mahalanobis",
+            "occupancy",
+            "temporal_variance",
+            "condition_number",
+        }
         assert set(result.keys()) == expected_keys
-        
+
         # num_sources should match input
         assert result["masks"].shape[0] == N_SPEAKERS
 
@@ -1417,6 +1475,7 @@ class TestGSSStandaloneAPIs:
 # ---------------------------------------------------------------------------
 # Backprop through audio and activity
 # ---------------------------------------------------------------------------
+
 
 class TestBackprop:
     """Verify that gradients flow through audio and activity (mean/max aggregation)."""
@@ -1445,21 +1504,21 @@ class TestBackprop:
         return audio, activity
 
     def _run_pipeline(self, frontend, audio_t, activity_t):
-        audio_3d    = audio_t.unsqueeze(0)
+        audio_3d = audio_t.unsqueeze(0)
         activity_3d = activity_t.unsqueeze(0)
-        x_enc, _    = frontend.analysis(audio_3d)
-        x_enc, _    = frontend.dereverb(input=x_enc)
+        x_enc, _ = frontend.analysis(audio_3d)
+        x_enc, _ = frontend.dereverb(input=x_enc)
         a_enc = activity_time_to_timefreq(
             activity_3d,
             win_length=frontend.fft_length,
             hop_length=frontend.hop_length,
             aggregation=frontend.activity_aggregation,
         )
-        masks       = frontend.gss(x_enc, a_enc)
-        mask_t      = masks[:, :1]
-        mask_u      = masks.sum(dim=1, keepdim=True) - mask_t
+        masks = frontend.gss(x_enc, a_enc)
+        mask_t = masks[:, :1]
+        mask_u = masks.sum(dim=1, keepdim=True) - mask_t
         target_enc, _ = frontend.mc(input=x_enc, mask=mask_t, mask_undesired=mask_u)
-        out, _      = frontend.synthesis(input=target_enc)
+        out, _ = frontend.synthesis(input=target_enc)
         return out[0, 0]
 
     @pytest.mark.parametrize("aggregation", ["mean", "max"])
@@ -1493,6 +1552,7 @@ class TestBackprop:
 # Distributed Processing / Group Partitioning
 # ---------------------------------------------------------------------------
 
+
 class TestDistributedProcessing:
     """Test group partitioning for distributed processing (SLURM, etc.)."""
 
@@ -1510,19 +1570,19 @@ class TestDistributedProcessing:
     def test_partition_balanced_groups(self):
         """Multiple groups should have balanced total duration."""
         segments = [
-            {"start": 0.0, "end": 10.0, "speaker": "spkA"},    # 10s
-            {"start": 10.0, "end": 15.0, "speaker": "spkB"},   # 5s
-            {"start": 15.0, "end": 25.0, "speaker": "spkA"},   # 10s
-            {"start": 25.0, "end": 30.0, "speaker": "spkB"},   # 5s
+            {"start": 0.0, "end": 10.0, "speaker": "spkA"},  # 10s
+            {"start": 10.0, "end": 15.0, "speaker": "spkB"},  # 5s
+            {"start": 15.0, "end": 25.0, "speaker": "spkA"},  # 10s
+            {"start": 25.0, "end": 30.0, "speaker": "spkB"},  # 5s
         ]
         groups = frontend_module._partition_segments_by_duration(segments, num_groups=2)
-        
+
         # Each group should have total duration ~15s
         durations = []
         for group in groups:
             total_dur = sum(segments[i]["end"] - segments[i]["start"] for i in group)
             durations.append(total_dur)
-        
+
         assert len(groups) == 2
         assert sum(durations) == 30.0  # Total duration preserved
         # Check balance: difference should be small
@@ -1542,7 +1602,7 @@ class TestDistributedProcessing:
             {"start": 12.0, "end": 17.0},
         ]
         stats = frontend_module._compute_group_statistics(segments, [0, 1, 2])
-        
+
         assert stats["num_segments"] == 3
         assert stats["total_duration_seconds"] == 17.0
         assert stats["avg_duration_seconds"] == pytest.approx(17.0 / 3)
@@ -1555,7 +1615,7 @@ class TestDistributedProcessing:
             {"start": 12.0, "end": 17.0},
         ]
         stats = frontend_module._compute_group_statistics(segments, [0, 2])
-        
+
         assert stats["num_segments"] == 2
         assert stats["total_duration_seconds"] == 10.0  # 5 + 5
         assert stats["avg_duration_seconds"] == pytest.approx(5.0)
@@ -1566,7 +1626,7 @@ class TestDistributedProcessing:
             {"start": 0.0, "end": 5.0},
         ]
         stats = frontend_module._compute_group_statistics(segments, [])
-        
+
         assert stats["num_segments"] == 0
         assert stats["total_duration_seconds"] == 0.0
         assert stats["avg_duration_seconds"] == 0.0
@@ -1578,5 +1638,3 @@ class TestDistributedProcessing:
             frontend_module._partition_segments_by_duration(segments, num_groups=0)
         with pytest.raises(ValueError):
             frontend_module._partition_segments_by_duration(segments, num_groups=-1)
-
-

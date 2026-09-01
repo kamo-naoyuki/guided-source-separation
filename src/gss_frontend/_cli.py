@@ -2,11 +2,11 @@
 
 import argparse
 import json
-import sys
 import logging
+import sys
 import tempfile
 from pathlib import Path
-from typing import Optional, Sequence, List, Union
+from typing import List, Optional, Sequence, Union
 
 import numpy as np
 import soundfile as sf
@@ -18,22 +18,22 @@ logger = logging.getLogger(__name__)
 
 def _merge_overlapping_segments(segments: List) -> List:
     """Merge overlapping speaker segments into continuous denoising regions.
-    
+
     Args:
         segments: List of meeteval Segment objects or dicts
-        
+
     Returns:
         List of merged dicts with normalized format
     """
     if not segments:
         return []
-    
+
     # Helper to get segment properties regardless of type
     def get_start(seg):
         if isinstance(seg, dict):
             return seg.get("start", 0)
         return getattr(seg, "start", getattr(seg, "begin_time", 0))
-    
+
     def get_end(seg):
         if isinstance(seg, dict):
             return seg.get("end", 0)
@@ -41,15 +41,15 @@ def _merge_overlapping_segments(segments: List) -> List:
         if end is None and hasattr(seg, "duration"):
             end = float(get_start(seg)) + float(seg.duration)
         return end
-    
+
     # Sort by start time
     sorted_segs = sorted(segments, key=lambda s: get_start(s))
-    
+
     # Merge overlapping segments
     merged = []
     current_start = get_start(sorted_segs[0])
     current_end = get_end(sorted_segs[0])
-    
+
     for seg in sorted_segs[1:]:
         seg_start = get_start(seg)
         seg_end = get_end(seg)
@@ -58,23 +58,27 @@ def _merge_overlapping_segments(segments: List) -> List:
             current_end = max(current_end, seg_end)
         else:
             # No overlap: save current region and start new one
-            merged.append({
-                "segment": f"{current_start:.2f}-{current_end:.2f}",
-                "speaker": "all_speakers",
-                "start": float(current_start),
-                "end": float(current_end),
-            })
+            merged.append(
+                {
+                    "segment": f"{current_start:.2f}-{current_end:.2f}",
+                    "speaker": "all_speakers",
+                    "start": float(current_start),
+                    "end": float(current_end),
+                }
+            )
             current_start = seg_start
             current_end = seg_end
-    
+
     # Don't forget the last segment
-    merged.append({
-        "segment": f"{current_start:.2f}-{current_end:.2f}",
-        "speaker": "all_speakers",
-        "start": float(current_start),
-        "end": float(current_end),
-    })
-    
+    merged.append(
+        {
+            "segment": f"{current_start:.2f}-{current_end:.2f}",
+            "speaker": "all_speakers",
+            "start": float(current_start),
+            "end": float(current_end),
+        }
+    )
+
     return merged
 
 
@@ -89,7 +93,7 @@ def main():
             "Install it with: pip install meeteval"
         )
         sys.exit(1)
-    
+
     parser = argparse.ArgumentParser(
         description="Enhance speech in diarized segments using GSS.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -149,17 +153,17 @@ Examples:
         type=str,
         default=None,
         help="Target speaker: int (index), str (label), or None (all speakers, default). "
-             "Ignored if --denoising-only is set.",
+        "Ignored if --denoising-only is set.",
     )
 
     parser.add_argument(
         "--denoising-only",
         action="store_true",
         help="Enable denoising-only mode: remove background noise while keeping all speakers. "
-             "Outputs one denoised segment per time interval where any speaker is active, "
-             "regardless of speaker identity. Useful for iterative denoising: "
-             "denoise -> re-diarize (higher confidence) -> separate speakers. "
-             "Ignores --speaker-id. Useful for meeting recording preprocessing.",
+        "Outputs one denoised segment per time interval where any speaker is active, "
+        "regardless of speaker identity. Useful for iterative denoising: "
+        "denoise -> re-diarize (higher confidence) -> separate speakers. "
+        "Ignores --speaker-id. Useful for meeting recording preprocessing.",
     )
 
     # Diarization options
@@ -228,7 +232,7 @@ Examples:
         type=int,
         default=None,
         help="For single multi-channel file: select specific channels (0-based indexing). "
-             "If not specified, all channels are used. Example: --channels 0 2 (use channels 0 and 2).",
+        "If not specified, all channels are used. Example: --channels 0 2 (use channels 0 and 2).",
     )
 
     parser.add_argument(
@@ -341,7 +345,7 @@ Examples:
         type=str,
         default="max_snr",
         help="Channel selection for beamformer output: 'max_snr' (auto-select by SNR, default), "
-             "'none' (output all channels, MIMO mode), or integer channel index (0-based).",
+        "'none' (output all channels, MIMO mode), or integer channel index (0-based).",
     )
 
     parser.add_argument(
@@ -364,7 +368,7 @@ Examples:
         type=str,
         default="wav",
         help="Output audio format: 'wav', 'flac', 'ogg', etc. (default: wav). "
-             "Supported formats depend on installed soundfile backends.",
+        "Supported formats depend on installed soundfile backends.",
     )
 
     parser.add_argument(
@@ -374,10 +378,10 @@ Examples:
         nargs="?",
         const="segments",
         help="Save segment metadata as SegLST and JSON formats for later embedding. "
-             "Optionally specify filename prefix (default: 'segments'). "
-             "Useful for distributed processing: prefix can include placeholders like {group_id}. "
-             "Example: --output-seglst segments_group{group_id} "
-             "Will generate: segments_group0.seglst, segments_group0.json, etc.",
+        "Optionally specify filename prefix (default: 'segments'). "
+        "Useful for distributed processing: prefix can include placeholders like {group_id}. "
+        "Example: --output-seglst segments_group{group_id} "
+        "Will generate: segments_group0.seglst, segments_group0.json, etc.",
     )
 
     parser.add_argument(
@@ -390,7 +394,7 @@ Examples:
 
     # Handle channel selection for single multi-channel files
     audio_path = list(args.audio)  # Convert to list to unify handling
-    
+
     if args.channels is not None:
         if len(args.audio) > 1:
             logger.warning("--channels is ignored when multiple audio files are provided")
@@ -404,17 +408,13 @@ Examples:
                 sys.exit(1)
 
             if audio.ndim == 1:
-                logger.warning(
-                    f"Input file {audio_file} is mono. --channels is ignored."
-                )
+                logger.warning(f"Input file {audio_file} is mono. --channels is ignored.")
             else:
                 # Validate channel indices
                 num_channels = audio.shape[1]
                 for ch_idx in args.channels:
                     if ch_idx < 0 or ch_idx >= num_channels:
-                        logger.error(
-                            f"Channel index {ch_idx} out of range [0, {num_channels-1}]"
-                        )
+                        logger.error(f"Channel index {ch_idx} out of range [0, {num_channels-1}]")
                         sys.exit(1)
 
                 logger.info(
@@ -428,7 +428,7 @@ Examples:
                     ch_file = Path(tmpdir) / f"ch{ch_idx}.wav"
                     sf.write(str(ch_file), audio[:, ch_idx], sr)
                     audio_path.append(str(ch_file))
-                
+
                 # Note: temporary directory will persist for processing
                 logger.debug(f"Temporary channel files stored in {tmpdir}")
 
@@ -447,7 +447,9 @@ Examples:
     valid_regions = None
     if args.valid_regions:
         if len(args.valid_regions) % 2 != 0:
-            parser.error("--valid-regions must have even number of values (start1 end1 start2 end2 ...)")
+            parser.error(
+                "--valid-regions must have even number of values (start1 end1 start2 end2 ...)"
+            )
         valid_regions = [
             (args.valid_regions[i], args.valid_regions[i + 1])
             for i in range(0, len(args.valid_regions), 2)
@@ -487,15 +489,17 @@ Examples:
 
     # Run enhancement
     logger.info("Running enhancement from diarization...")
-    
+
     # Print basic information about the task
     try:
         import meeteval
-        
+
         # Load diarization to get statistics
-        diar_file = str(diarization) if isinstance(diarization, (str, Path)) else str(diarization[0])
+        diar_file = (
+            str(diarization) if isinstance(diarization, (str, Path)) else str(diarization[0])
+        )
         diar_data = meeteval.io.load(diar_file)
-        
+
         # Get unique speakers
         speakers = set()
         total_duration = 0.0
@@ -507,14 +511,14 @@ Examples:
             else:
                 speaker = segment.speaker
                 end = segment.end
-            
+
             if speaker is not None and end is not None:
                 speakers.add(speaker)
                 total_duration = max(total_duration, float(end))
-        
+
         num_speakers = len(speakers)
         num_segments = len(diar_data)
-        
+
         logger.info("=" * 60)
         logger.info("Enhancement Task Summary")
         logger.info("=" * 60)
@@ -534,33 +538,36 @@ Examples:
     except Exception as e:
         logger.warning(f"Could not load diarization for stats: {type(e).__name__}: {e}")
         import traceback
+
         logger.debug(f"Traceback:\n{traceback.format_exc()}")
-    
+
     # For denoising-only mode, merge all speaker segments
     enhancement_diarization = diarization
     if args.denoising_only:
         logger.info("Denoising-only mode: merging all speaker segments...")
         try:
             import meeteval
-            
+
             # Load diarization
             diar_loaded = meeteval.io.load(
                 str(diarization) if isinstance(diarization, (str, Path)) else str(diarization[0])
             )
-            
+
             # If multiple diarization files, load and merge them
             if isinstance(diarization, (list, tuple)) and len(diarization) > 1:
                 for diar_file in diarization[1:]:
                     diar_next = meeteval.io.load(str(diar_file))
                     diar_loaded = diar_loaded.union(diar_next)
-            
+
             # Convert all segments to use a single unified speaker label
             unified_segments = []
             for segment in diar_loaded:
                 # Handle both RTTMLine and dict formats
                 if isinstance(segment, dict):
                     seg_dict = {
-                        "segment": segment.get("segment", f"{segment.get('start', 0):.2f}-{segment.get('end', 0):.2f}"),
+                        "segment": segment.get(
+                            "segment", f"{segment.get('start', 0):.2f}-{segment.get('end', 0):.2f}"
+                        ),
                         "speaker": "all_speakers",
                         "start": segment.get("start", 0),
                         "end": segment.get("end", 0),
@@ -578,14 +585,15 @@ Examples:
                         "end": float(end),
                     }
                 unified_segments.append(seg_dict)
-            
+
             # Merge overlapping segments
             # This creates continuous denoised regions
             merged_segments = _merge_overlapping_segments(unified_segments)
-            
+
             # Create temporary diarization file for processing
             import tempfile
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.rttm', delete=False) as f:
+
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".rttm", delete=False) as f:
                 # Write in RTTM format
                 for idx, seg in enumerate(merged_segments):
                     # RTTM format: <type> <file_id> <chnl> <begin_time> <duration> <ortho> <stype> <speaker_id> <confidence> <lookahead>
@@ -594,17 +602,19 @@ Examples:
                     end = float(seg["end"])
                     duration = end - start
                     speaker = seg.get("speaker", "all_speakers")
-                    f.write(f"SPEAKER {session_id} 1 {start:.2f} {duration:.2f} <NA> <NA> {speaker} <NA> <NA>\n")
-                
+                    f.write(
+                        f"SPEAKER {session_id} 1 {start:.2f} {duration:.2f} <NA> <NA> {speaker} <NA> <NA>\n"
+                    )
+
                 enhancement_diarization = f.name
                 logger.info(f"Merged diarization: {len(merged_segments)} denoised regions")
                 for seg in merged_segments:
                     logger.debug(f"  Region: {seg['start']:.2f}s - {seg['end']:.2f}s")
-            
+
         except Exception as e:
             logger.error(f"Failed to merge diarization for denoising: {e}")
             sys.exit(1)
-    
+
     try:
         segments = frontend.enhance_from_diarization(
             audio_path=audio_path,
@@ -647,24 +657,28 @@ Examples:
     seglst_segments = []
     speakers_summary = {}
     total_segments = 0
-    
+
     for idx, item in enumerate(segments):
         speaker = item["speaker"]
         seg_start = item["segment_start"]
         seg_end = item["segment_end"]
         sample_rate = item["sample_rate"]
         enhanced_audio = item["enhanced_audio"]
-        segment_index = item["segment_index"]  # Use global index for consistent naming across groups
+        segment_index = item[
+            "segment_index"
+        ]  # Use global index for consistent naming across groups
 
         total_segments += 1
 
         # Display progress
         progress = f"[segment {idx+1}]"
-        logger.info(f"{progress} Processing segment: speaker={speaker}, time={seg_start:.2f}s-{seg_end:.2f}s")
+        logger.info(
+            f"{progress} Processing segment: speaker={speaker}, time={seg_start:.2f}s-{seg_end:.2f}s"
+        )
 
         # Format output filename with specified extension
-        output_format = args.output_format.lower().lstrip('.')  # Remove leading dot if present
-        
+        output_format = args.output_format.lower().lstrip(".")  # Remove leading dot if present
+
         # In denoising-only mode, use "denoised" instead of speaker name
         label = "denoised" if args.denoising_only else speaker
         filename = f"{segment_index:03d}_{label}_{seg_start:.2f}_{seg_end:.2f}.{output_format}"
@@ -674,59 +688,62 @@ Examples:
         # soundfile expects (samples,) for mono or (samples, channels) for multi-channel
         # If multi-channel (channels, samples), need to transpose to (samples, channels)
         import torch
+
         audio_to_write = enhanced_audio
-        
+
         # Convert torch tensor to numpy if needed
         if isinstance(audio_to_write, torch.Tensor):
             audio_to_write = audio_to_write.cpu().numpy()
-        
+
         # Transpose if multi-channel
         if audio_to_write.ndim > 1:
             audio_to_write = audio_to_write.T  # (channels, samples) -> (samples, channels)
-        
+
         # Set format and subtype
         subtype = None
         if output_format in {"wav", "flac", "aiff"}:
             subtype = "PCM_16"
-        
+
         # soundfile.write requires format in lowercase or uppercase depending on libsndfile version
         sf.write(str(filepath), audio_to_write, sample_rate, subtype=subtype)
         logger.info(f"  Saved: {filepath}")
-        
+
         # Track speaker counts for summary
         if speaker not in speakers_summary:
             speakers_summary[speaker] = 0
         speakers_summary[speaker] += 1
-        
+
         # Collect metadata for SegLST using meeteval
-        seglst_segments.append({
-            "segment": f"{seg_start:.2f}-{seg_end:.2f}",
-            "speaker": speaker,
-            "start": seg_start,
-            "end": seg_end,
-            "audio_path": str(filepath.relative_to(output_dir.parent)),
-            "sample_rate": sample_rate,
-        })
+        seglst_segments.append(
+            {
+                "segment": f"{seg_start:.2f}-{seg_end:.2f}",
+                "speaker": speaker,
+                "start": seg_start,
+                "end": seg_end,
+                "audio_path": str(filepath.relative_to(output_dir.parent)),
+                "sample_rate": sample_rate,
+            }
+        )
 
     # Save SegLST if requested
     if args.output_seglst:
         import meeteval
-        
+
         # Format filename with placeholders
         seglst_prefix = args.output_seglst.format(group_id=args.group_id)
         seglst_file = output_dir / f"{seglst_prefix}.seglst"
         seglst_json = output_dir / f"{seglst_prefix}.json"
-        
+
         # Save as SegLST text format (meeteval standard)
         # Format: "segment_spec speaker_label"
         with open(seglst_file, "w") as f:
             for s in seglst_segments:
                 f.write(f"{s['segment']} {s['speaker']}\n")
-        
+
         # Also save JSON with audio paths + metadata for gss-embed
         with open(seglst_json, "w") as f:
             json.dump(seglst_segments, f, indent=2)
-        
+
         logger.info(f"SegLST metadata saved: {seglst_file}")
         logger.info(f"SegLST JSON (for gss-embed) saved: {seglst_json}")
 
@@ -735,7 +752,7 @@ Examples:
     logger.info("Enhancement Processing Complete")
     logger.info("=" * 60)
     logger.info(f"  Segments processed: {total_segments}")
-    
+
     for speaker, count in sorted(speakers_summary.items()):
         logger.info(f"    Speaker '{speaker}': {count} segments")
     logger.info("=" * 60)
