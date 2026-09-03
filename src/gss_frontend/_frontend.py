@@ -1402,7 +1402,7 @@ class GSS:
         )
 
         # Return full result dict including enhanced audio and statistics
-        result_dict = cast(Dict[str, Any], result)
+        result_dict = result
         audio_output = result_dict["audio"]
         if isinstance(audio_output, list):
             if isinstance(audio, torch.Tensor):
@@ -1468,7 +1468,7 @@ class GSS:
         )
 
         # Return full result dict including enhanced audio and statistics
-        result_dict = cast(Dict[str, Any], result)
+        result_dict = result
         audio_output = result_dict["audio"]
         if isinstance(audio_output, list):
             if isinstance(audio, torch.Tensor):
