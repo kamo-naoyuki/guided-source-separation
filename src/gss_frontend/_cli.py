@@ -6,7 +6,7 @@ import logging
 import sys
 import tempfile
 from pathlib import Path
-from typing import List, Optional, Sequence, Union
+from typing import List, Optional, Sequence, SupportsFloat, TypedDict, Union, cast
 
 import numpy as np
 import soundfile as sf
@@ -16,7 +16,14 @@ from ._frontend import GSS
 logger = logging.getLogger(__name__)
 
 
-def _merge_overlapping_segments(segments: List) -> List:
+class MergedSegment(TypedDict):
+    segment: str
+    speaker: str
+    start: float
+    end: float
+
+
+def _merge_overlapping_segments(segments: List) -> List[MergedSegment]:
     """Merge overlapping speaker segments into continuous denoising regions.
 
     Args:
@@ -29,24 +36,30 @@ def _merge_overlapping_segments(segments: List) -> List:
         return []
 
     # Helper to get segment properties regardless of type
-    def get_start(seg):
+    def get_start(seg) -> float:
         if isinstance(seg, dict):
-            return seg.get("start", 0)
-        return getattr(seg, "start", getattr(seg, "begin_time", 0))
+            value = seg.get("start", 0)
+        else:
+            value = getattr(seg, "start", getattr(seg, "begin_time", 0))
+        if value is None:
+            raise ValueError("Segment has no start time")
+        return float(cast(SupportsFloat, value))
 
-    def get_end(seg):
+    def get_end(seg) -> float:
         if isinstance(seg, dict):
-            return seg.get("end", 0)
+            return float(seg.get("end", 0))
         end = getattr(seg, "end", None)
         if end is None and hasattr(seg, "duration"):
-            end = float(get_start(seg)) + float(seg.duration)
-        return end
+            end = get_start(seg) + float(seg.duration)
+        if end is None:
+            raise ValueError("Segment has no end time")
+        return float(cast(SupportsFloat, end))
 
     # Sort by start time
     sorted_segs = sorted(segments, key=lambda s: get_start(s))
 
     # Merge overlapping segments
-    merged = []
+    merged: List[MergedSegment] = []
     current_start = get_start(sorted_segs[0])
     current_end = get_end(sorted_segs[0])
 
@@ -560,29 +573,42 @@ Examples:
                     diar_loaded = diar_loaded.union(diar_next)
 
             # Convert all segments to use a single unified speaker label
-            unified_segments = []
+            unified_segments: List[MergedSegment] = []
             for segment in diar_loaded:
                 # Handle both RTTMLine and dict formats
+                seg_dict: MergedSegment
                 if isinstance(segment, dict):
+                    start = segment.get("start", 0)
+                    end = segment.get("end", 0)
+                    if start is None or end is None:
+                        raise ValueError("Diarization segment has no start or end time")
+                    start = float(cast(SupportsFloat, start))
+                    end = float(cast(SupportsFloat, end))
                     seg_dict = {
                         "segment": segment.get(
-                            "segment", f"{segment.get('start', 0):.2f}-{segment.get('end', 0):.2f}"
+                            "segment", f"{start:.2f}-{end:.2f}"
                         ),
                         "speaker": "all_speakers",
-                        "start": segment.get("start", 0),
-                        "end": segment.get("end", 0),
+                        "start": start,
+                        "end": end,
                     }
                 else:
                     # RTTMLine or similar object
                     start = getattr(segment, "start", getattr(segment, "begin_time", 0))
+                    if start is None:
+                        raise ValueError("Diarization segment has no start time")
+                    start = float(cast(SupportsFloat, start))
                     end = getattr(segment, "end", None)
                     if end is None and hasattr(segment, "duration"):
-                        end = float(start) + float(segment.duration)
+                        end = start + float(segment.duration)
+                    if end is None:
+                        raise ValueError("Diarization segment has no end time")
+                    end = float(cast(SupportsFloat, end))
                     seg_dict = {
                         "segment": f"{start:.2f}-{end:.2f}",
                         "speaker": "all_speakers",
-                        "start": float(start),
-                        "end": float(end),
+                        "start": start,
+                        "end": end,
                     }
                 unified_segments.append(seg_dict)
 

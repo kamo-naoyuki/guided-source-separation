@@ -1158,7 +1158,7 @@ class GSS:
         self,
         audio: Union[np.ndarray, torch.Tensor],
         activity: Union[np.ndarray, torch.Tensor],
-        speaker_id: int,
+        speaker_id: Union[int, List[int]],
         left_context: int = 0,
         right_context: int = 0,
         return_dict: bool = False,
@@ -1217,6 +1217,8 @@ class GSS:
                         right_context_frames=right_context_frames,
                         num_chunks=1,
                         cpu_fallback=True,
+                        return_dict=return_dict,
+                        garbage_class=garbage_class,
                     )
             except Exception:
                 logger.exception("CPU fallback also failed. Falling back to channel 0.")
@@ -1230,7 +1232,25 @@ class GSS:
             # result is dict when return_dict=True
             result_dict = cast(Dict[str, Any], result)
             audio_output = result_dict["audio"]
-            if torch.is_tensor(audio_output):
+            if isinstance(speaker_id, list):
+                audio_list = cast(List[torch.Tensor], audio_output)
+                trimmed_list = []
+                for audio_tensor in audio_list:
+                    if audio_tensor.dim() == 1:
+                        trimmed = audio_tensor[left_context:]
+                        if right_context > 0:
+                            trimmed = trimmed[:-right_context]
+                    else:
+                        trimmed = audio_tensor[:, left_context:]
+                        if right_context > 0:
+                            trimmed = trimmed[:, :-right_context]
+                    trimmed_list.append(trimmed)
+                result_dict["audio"] = trimmed_list
+                if is_numpy:
+                    result_dict["audio"] = [
+                        output.detach().cpu().numpy() for output in trimmed_list
+                    ]
+            elif torch.is_tensor(audio_output):
                 audio_tensor = cast(torch.Tensor, audio_output)
                 if audio_tensor.dim() == 1:
                     # Single-channel mode: (samples,)
@@ -1249,7 +1269,24 @@ class GSS:
             return result_dict
 
         # Drop context from time domain - handle both STANDARD and MIMO modes
-        # result is tensor when return_dict=False (speaker_id is always int in enhance_auto)
+        # result is a tensor for one speaker and a list for multiple speakers.
+        if isinstance(speaker_id, list):
+            result_list = cast(List[torch.Tensor], result)
+            trimmed_list = []
+            for output in result_list:
+                if output.dim() == 1:
+                    trimmed = output[left_context:]
+                    if right_context > 0:
+                        trimmed = trimmed[:-right_context]
+                else:
+                    trimmed = output[:, left_context:]
+                    if right_context > 0:
+                        trimmed = trimmed[:, :-right_context]
+                trimmed_list.append(trimmed)
+            if is_numpy:
+                return [output.detach().cpu().numpy() for output in trimmed_list]
+            return trimmed_list
+
         result_tensor = cast(torch.Tensor, result)
         if result_tensor.dim() == 1:
             # Single-channel mode: (samples,)
@@ -1351,11 +1388,11 @@ class GSS:
         # Create uniform activity for all sources
         activity = np.ones((num_sources, num_samples), dtype=np.float32) / num_sources
 
-        # Use speaker_id=0 (arbitrary choice) with return_dict=True, and garbage_class=False for blind BSS
+        # Beamform every source; masks and statistics contain all sources.
         result = self.enhance(
             audio=audio,
             activity=activity,
-            speaker_id=0,
+            speaker_id=list(range(num_sources)),
             left_context=left_context,
             right_context=right_context,
             return_dict=True,
@@ -1385,8 +1422,8 @@ class GSS:
         num_sources : int
             Total number of sources (speakers + noise). Activity initialized uniformly.
         speaker_id : int
-            Dummy speaker index (default 0). Not used for blind BSS but required
-            by enhance_auto() interface.
+            Retained for API compatibility. Not used for blind BSS; all sources
+            are enhanced.
         left_context : int
             Number of leading samples that are context (will be dropped).
         right_context : int
@@ -1408,11 +1445,11 @@ class GSS:
         # Create uniform activity for all sources
         activity = np.ones((num_sources, num_samples), dtype=np.float32) / num_sources
 
-        # Use enhance_auto() for OOM-aware chunking with uniform activity and garbage_class=False
+        # Beamform every source using enhance_auto() for OOM-aware chunking.
         result = self.enhance_auto(
             audio=audio,
             activity=activity,
-            speaker_id=speaker_id,
+            speaker_id=list(range(num_sources)),
             left_context=left_context,
             right_context=right_context,
             return_dict=True,

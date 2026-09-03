@@ -1427,6 +1427,9 @@ class TestGSSStandaloneAPIs:
             "condition_number",
         }
         assert set(result.keys()) == expected_keys
+        assert isinstance(result["audio"], list)
+        assert len(result["audio"]) == N_SPEAKERS
+        assert all(source.shape == (N_SAMPLES,) for source in result["audio"])
 
     def test_enhance_unguided_masks_shape(self, frontend):
         """Test that masks have correct shape: (num_sources, freq, frames)."""
@@ -1470,6 +1473,9 @@ class TestGSSStandaloneAPIs:
 
         # num_sources should match input
         assert result["masks"].shape[0] == N_SPEAKERS
+        assert isinstance(result["audio"], list)
+        assert len(result["audio"]) == N_SPEAKERS
+        assert all(source.shape == (N_SAMPLES,) for source in result["audio"])
 
 
 # ---------------------------------------------------------------------------

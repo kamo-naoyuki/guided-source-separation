@@ -15,4 +15,7 @@ build/
 dist/
 *.egg-info/
 
+# Local agent instructions
+AGENTS.md
+
 .DS_Store
