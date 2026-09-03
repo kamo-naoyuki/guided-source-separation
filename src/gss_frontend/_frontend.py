@@ -1368,7 +1368,7 @@ class GSS:
         audio : np.ndarray or torch.Tensor, shape (channels, samples)
             Multi-channel waveform (float32 recommended).
         num_sources : int
-            Total number of sources (speakers + noise). Activity initialized uniformly.
+            Total number of sources (speakers + noise). Activity is initialized uniformly.
         left_context : int
             Number of leading samples that are context (will be dropped).
         right_context : int
@@ -1384,6 +1384,8 @@ class GSS:
             - 'temporal_variance': (num_sources,) temporal variance per source
             - 'condition_number': (num_sources, freq) eigenvalue ratio per freq
         """
+        if num_sources <= 0:
+            raise ValueError("num_sources must be positive")
         num_samples = audio.shape[-1]
         # Create uniform activity for all sources
         activity = np.ones((num_sources, num_samples), dtype=np.float32) / num_sources
@@ -1400,7 +1402,14 @@ class GSS:
         )
 
         # Return full result dict including enhanced audio and statistics
-        return cast(Dict[str, torch.Tensor], result)
+        result_dict = cast(Dict[str, Any], result)
+        audio_output = result_dict["audio"]
+        if isinstance(audio_output, list):
+            if isinstance(audio, torch.Tensor):
+                result_dict["audio"] = torch.stack(audio_output)
+            else:
+                result_dict["audio"] = np.stack(audio_output)
+        return cast(Dict[str, torch.Tensor], result_dict)
 
     def enhance_unguided_auto(
         self,
@@ -1420,7 +1429,7 @@ class GSS:
         audio : np.ndarray or torch.Tensor, shape (channels, samples)
             Multi-channel waveform (float32 recommended).
         num_sources : int
-            Total number of sources (speakers + noise). Activity initialized uniformly.
+            Total number of sources (speakers + noise). Activity is initialized uniformly.
         speaker_id : int
             Retained for API compatibility. Not used for blind BSS; all sources
             are enhanced.
@@ -1440,6 +1449,8 @@ class GSS:
             - 'temporal_variance': (num_sources,) temporal variance per source
             - 'condition_number': (num_sources, freq) eigenvalue ratio per freq
         """
+        if num_sources <= 0:
+            raise ValueError("num_sources must be positive")
         num_samples = audio.shape[-1]
 
         # Create uniform activity for all sources
@@ -1457,7 +1468,14 @@ class GSS:
         )
 
         # Return full result dict including enhanced audio and statistics
-        return cast(Dict[str, torch.Tensor], result)
+        result_dict = cast(Dict[str, Any], result)
+        audio_output = result_dict["audio"]
+        if isinstance(audio_output, list):
+            if isinstance(audio, torch.Tensor):
+                result_dict["audio"] = torch.stack(audio_output)
+            else:
+                result_dict["audio"] = np.stack(audio_output)
+        return cast(Dict[str, torch.Tensor], result_dict)
 
     def enhance_segment(
         self,

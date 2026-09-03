@@ -165,6 +165,7 @@ Examples:
         "--speaker-id",
         type=str,
         default=None,
+        nargs="+",
         help="Target speaker: int (index), str (label), or None (all speakers, default). "
         "Ignored if --denoising-only is set.",
     )
@@ -469,17 +470,22 @@ Examples:
         ]
 
     # Parse speaker_id
-    speaker_id: Optional[Union[int, str]] = None
+    speaker_id: Optional[Union[int, str, List[Union[int, str]]]] = None
     if args.denoising_only:
         logger.info("Denoising-only mode: ignoring --speaker-id and processing all speakers")
         speaker_id = None
     elif args.speaker_id is not None:
-        if args.speaker_id.lower() == "none":
+        speaker_values = args.speaker_id
+        if len(speaker_values) == 1 and speaker_values[0].lower() == "none":
             speaker_id = None
-        elif args.speaker_id.isdigit():
-            speaker_id = int(args.speaker_id)
         else:
-            speaker_id = args.speaker_id
+            parsed_speakers: List[Union[int, str]] = []
+            for speaker_value in speaker_values:
+                if speaker_value.isdigit():
+                    parsed_speakers.append(int(speaker_value))
+                else:
+                    parsed_speakers.append(speaker_value)
+            speaker_id = parsed_speakers[0] if len(parsed_speakers) == 1 else parsed_speakers
 
     # Parse mc_ref_channel
     mc_ref_channel = args.mc_ref_channel
