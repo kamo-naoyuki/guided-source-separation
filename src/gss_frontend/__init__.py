@@ -18,6 +18,7 @@ from ._modules import (
     MaskBasedBeamformer,
     MaskBasedDereverbWPE,
     MaskEstimatorGSS,
+    ParametricMultichannelWienerFilter,
     SpectrogramToAudio,
 )
 
@@ -29,4 +30,5 @@ __all__ = [
     "MaskBasedDereverbWPE",
     "MaskBasedBeamformer",
     "MaskEstimatorGSS",
+    "ParametricMultichannelWienerFilter",
 ]
