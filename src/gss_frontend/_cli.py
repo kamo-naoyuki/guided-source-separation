@@ -391,11 +391,11 @@ Examples:
         default=None,
         nargs="?",
         const="segments",
-        help="Save segment metadata as SegLST and JSON formats for later embedding. "
+        help="Save segment metadata as a SegLST JSON file (.seglst) for later embedding. "
         "Optionally specify filename prefix (default: 'segments'). "
         "Useful for distributed processing: prefix can include placeholders like {group_id}. "
         "Example: --output-seglst segments_group{group_id} "
-        "Will generate: segments_group0.seglst, segments_group0.json, etc.",
+        "Will generate: segments_group0.seglst.",
     )
 
     parser.add_argument(
@@ -731,6 +731,12 @@ Examples:
         if audio_to_write.ndim > 1:
             audio_to_write = audio_to_write.T  # (channels, samples) -> (samples, channels)
 
+        # Normalize to full [-1, 1] range to minimize quantization error;
+        # record the divisor so gss-embed can restore the original amplitude
+        peak = float(np.abs(audio_to_write).max())
+        scale = peak if peak > 0 else 1.0
+        audio_to_write = audio_to_write / scale
+
         # Set format and subtype
         subtype = None
         if output_format in {"wav", "flac", "aiff"}:
@@ -745,39 +751,30 @@ Examples:
             speakers_summary[speaker] = 0
         speakers_summary[speaker] += 1
 
-        # Collect metadata for SegLST using meeteval
+        # Collect metadata for SegLST (JSON format per meeteval spec)
         seglst_segments.append(
             {
-                "segment": f"{seg_start:.2f}-{seg_end:.2f}",
+                "session_id": args.diarization_session_id or "meeting",
                 "speaker": speaker,
-                "start": seg_start,
-                "end": seg_end,
+                "start_time": seg_start,
+                "end_time": seg_end,
                 "audio_path": str(filepath.relative_to(output_dir.parent)),
                 "sample_rate": sample_rate,
+                "scale": scale,  # multiply saved audio by this to restore the original amplitude
             }
         )
 
     # Save SegLST if requested
     if args.output_seglst:
-        import meeteval
-
         # Format filename with placeholders
         seglst_prefix = args.output_seglst.format(group_id=args.group_id)
         seglst_file = output_dir / f"{seglst_prefix}.seglst"
-        seglst_json = output_dir / f"{seglst_prefix}.json"
 
-        # Save as SegLST text format (meeteval standard)
-        # Format: "segment_spec speaker_label"
+        # SegLST is a JSON file (see https://github.com/fgnt/meeteval)
         with open(seglst_file, "w") as f:
-            for s in seglst_segments:
-                f.write(f"{s['segment']} {s['speaker']}\n")
-
-        # Also save JSON with audio paths + metadata for gss-embed
-        with open(seglst_json, "w") as f:
             json.dump(seglst_segments, f, indent=2)
 
         logger.info(f"SegLST metadata saved: {seglst_file}")
-        logger.info(f"SegLST JSON (for gss-embed) saved: {seglst_json}")
 
     # Print processing completion summary
     logger.info("=" * 60)

@@ -148,15 +148,13 @@ class TestGSSEnhanceCLI:
 
         assert result.returncode == 0, f"CLI failed: {result.stderr}"
 
-        # Check SegLST files
+        # Check SegLST file (single JSON file per meeteval spec)
         seglst_file = output_dir / "segments.seglst"
-        json_file = output_dir / "segments.json"
 
         assert seglst_file.exists(), "SegLST file not created"
-        assert json_file.exists(), "Metadata JSON file not created"
 
         # Verify JSON content
-        metadata = json.loads(json_file.read_text())
+        metadata = json.loads(seglst_file.read_text())
         assert isinstance(metadata, list), "Metadata should be a list"
         assert len(metadata) > 0, "No metadata entries"
         assert "speaker" in metadata[0], "Missing speaker field"
@@ -222,9 +220,9 @@ class TestGSSEmbedCLI:
         )
         assert result.returncode == 0, f"gss-enhance failed: {result.stderr}"
 
-        # Check that segments JSON was created
-        segments_json = enhanced_dir / "segments.json"
-        assert segments_json.exists(), "Segments JSON not created"
+        # Check that segments SegLST file was created
+        segments_json = enhanced_dir / "segments.seglst"
+        assert segments_json.exists(), "Segments SegLST file not created"
 
 
 class TestCLIIntegration:
@@ -260,9 +258,9 @@ class TestCLIIntegration:
         output_files = list(enhanced_dir.glob("*.wav"))
         assert len(output_files) > 0, "No enhanced segments created in step 1"
 
-        # Verify segments.json exists
-        segments_json = enhanced_dir / "segments.json"
-        assert segments_json.exists(), f"Segments JSON not found at {segments_json}"
+        # Verify segments.seglst exists
+        segments_json = enhanced_dir / "segments.seglst"
+        assert segments_json.exists(), f"Segments SegLST not found at {segments_json}"
 
         # Step 2: Embed back into original audio (if possible)
         # Note: gss-embed is still simplified without --mc-ref-channel none mode
