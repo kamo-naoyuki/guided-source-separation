@@ -591,9 +591,7 @@ Examples:
                     start = float(cast(SupportsFloat, start))
                     end = float(cast(SupportsFloat, end))
                     seg_dict = {
-                        "segment": segment.get(
-                            "segment", f"{start:.2f}-{end:.2f}"
-                        ),
+                        "segment": segment.get("segment", f"{start:.2f}-{end:.2f}"),
                         "speaker": "all_speakers",
                         "start": start,
                         "end": end,
